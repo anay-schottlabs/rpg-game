@@ -152,6 +152,14 @@
       </svg>
     </div>
 
+    <!-- Dev command console — press "/" to open. Not part of the in-universe
+         UI at all (see js/game.js), purely for testing: teleporting around
+         and wiping saved progress without playing through to get there. -->
+    <div id="dev-console" class="hidden">
+      <div id="dev-console-suggestions"></div>
+      <input id="dev-console-input" type="text" autocomplete="off" spellcheck="false" placeholder="/command" />
+    </div>
+
     <div id="session-badge" class="hidden">
       Room <span id="session-badge-code"></span> — <span id="session-badge-count"></span> player(s)
     </div>

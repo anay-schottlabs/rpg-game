@@ -26,6 +26,41 @@ const bossHealthFillEl = document.getElementById("boss-health-fill");
 const bossHealthSheenEl = document.getElementById("boss-health-sheen");
 const bossHealthNameEl = document.getElementById("boss-health-name");
 const lobbyReturnVillageBtn = document.getElementById("lobby-return-village-btn");
+const devConsoleEl = document.getElementById("dev-console");
+const devConsoleInputEl = document.getElementById("dev-console-input");
+const devConsoleSuggestionsEl = document.getElementById("dev-console-suggestions");
+
+// --- World-seed persistence --------------------------------------------
+
+// Solo play used to reseed from real randomness on every load, so the map
+// was different every session. Now it's a save: the seed is generated once
+// and kept, so the exact same world (rivers, biome layout, everything
+// downstream of RNG.random()) regenerates on every reload. Hosting/joining
+// multiplayer still reseeds with a fresh per-session random seed (see
+// multiplayer.js) — this is specifically solo continuity, not shared with
+// other players. /reset (the dev console) clears this key.
+const WORLD_SEED_KEY = "rpgGameWorldSeed";
+
+function loadOrCreateWorldSeed() {
+  try {
+    const stored = localStorage.getItem(WORLD_SEED_KEY);
+    if (stored !== null) {
+      const seed = Number(stored);
+      if (!Number.isNaN(seed)) return seed;
+    }
+  } catch {
+    // Private browsing / storage disabled — falls through to a fresh seed,
+    // which just won't persist across reloads this session.
+  }
+  const seed = Math.floor(Math.random() * 2 ** 31);
+  try {
+    localStorage.setItem(WORLD_SEED_KEY, String(seed));
+  } catch {
+    // Same as above — non-fatal, just non-persistent.
+  }
+  return seed;
+}
+RNG.seed(loadOrCreateWorldSeed());
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -49,7 +84,23 @@ const keys = {
 };
 
 window.addEventListener("keydown", (e) => {
+  // While the dev console is open, its own input field (js/game.js's "---
+  // Dev command console ---" section) owns every keystroke — that
+  // listener stops propagation, but this is a second line of defense, and
+  // is what actually matters for "/" itself (see below) not re-triggering
+  // on every character typed.
+  if (devConsoleOpen) return;
+
   const key = e.key.toLowerCase();
+
+  // "/" opens the dev console — only when nothing else already has a real
+  // text field focused (e.g. the multiplayer room-code input), so it never
+  // hijacks typing "/" somewhere that's actually meant for it.
+  if (key === "/" && document.activeElement.tagName !== "INPUT") {
+    e.preventDefault();
+    openDevConsole();
+    return;
+  }
 
   if (key in keys) {
     const justPressed = !keys[key];
@@ -1113,15 +1164,7 @@ class Player {
       dy: (keys.s ? 1 : 0) - (keys.w ? 1 : 0),
       e: keys.shift,
     };
-    const prevX = this.x;
-    const prevY = this.y;
     simulatePlayerMovement(this, input, dt);
-
-    // Drives the continuous walking rustle (see Sound.setWalking) off
-    // actual displacement, not just held input — stays silent while
-    // blocked against water/an obstacle even if a movement key is held.
-    const moved = Math.hypot(this.x - prevX, this.y - prevY) > 0.01;
-    Sound.setWalking(moved);
   }
 
   draw(ctx, camera) {
@@ -2712,7 +2755,6 @@ function openDialogue(npc) {
   dialoguePortraitEl.style.background = NPC_PORTRAIT_COLOR[npc.def.kind] || "#8a7a68";
   dialogueNameEl.textContent = npc.def.name;
   dialogueTextEl.textContent = npc.def.lines[0];
-  Sound.setWalking(false);
   Sound.menuOpen();
 }
 
@@ -2851,7 +2893,6 @@ function transitionToWorld() {
   player.x = campfire.x;
   player.y = campfire.y + 110;
   player.dashTimeLeft = 0;
-  Sound.setWalking(false);
 }
 
 function transitionToVillage() {
@@ -2859,10 +2900,174 @@ function transitionToVillage() {
   player.x = village.spawnPoint.x;
   player.y = village.spawnPoint.y;
   player.dashTimeLeft = 0;
-  Sound.setWalking(false);
   lobbyEl.classList.add("lobby-hidden");
 }
 window.transitionToVillage = transitionToVillage; // bridge for js/lobby.js's Return button
+
+// --- Dev command console ------------------------------------------------
+
+// A "/" console for development/testing — jumping straight to a location or
+// wiping the save without actually playing through to get there. Not part
+// of the story or the in-universe UI at all; see #dev-console's styling.
+let devConsoleOpen = false;
+let devConsoleSuggestions = [];
+let devConsoleSuggestionIndex = -1;
+
+function teleportToBiomeIndex(index) {
+  currentArea = "world";
+  const { angleStart, angleEnd } = biomeSectorAngles(index);
+  const centerAngle = (angleStart + angleEnd) / 2;
+  const radius = (BIOME_INNER_RADIUS + WALL_START) / 2; // mid-depth — past the Grove blend, short of the boundary wall
+  player.x = WORLD_CENTER.x + Math.cos(centerAngle) * radius;
+  player.y = WORLD_CENTER.y + Math.sin(centerAngle) * radius;
+}
+
+const DEV_TELEPORT_TARGETS = {
+  village() {
+    currentArea = "village";
+    player.x = village.spawnPoint.x;
+    player.y = village.spawnPoint.y;
+  },
+  crystal_golem_boss() {
+    currentArea = "world";
+    player.x = bossArenaCenter.x + 60;
+    player.y = bossArenaCenter.y + 60;
+  },
+  woodland_grove() {
+    currentArea = "world";
+    player.x = WORLD_CENTER.x;
+    player.y = WORLD_CENTER.y + BIOME_INNER_RADIUS * 0.5;
+  },
+  marsh_bog: () => teleportToBiomeIndex(OUTER_BIOMES.findIndex((b) => b.id === "marshBog")),
+  mountain_foothills: () => teleportToBiomeIndex(OUTER_BIOMES.findIndex((b) => b.id === "mountainFoothills")),
+  frostfall_tundra: () => teleportToBiomeIndex(OUTER_BIOMES.findIndex((b) => b.id === "frostfallTundra")),
+  sunmeadow_clearing: () => teleportToBiomeIndex(OUTER_BIOMES.findIndex((b) => b.id === "sunmeadowClearing")),
+  hollow_deep: () => teleportToBiomeIndex(OUTER_BIOMES.findIndex((b) => b.id === "hollowDeep")),
+};
+
+const DEV_COMMANDS = {
+  teleport: {
+    argOptions: () => Object.keys(DEV_TELEPORT_TARGETS),
+    run(args) {
+      const target = DEV_TELEPORT_TARGETS[(args[0] || "").toLowerCase()];
+      if (!target) return;
+      target();
+      player.dashTimeLeft = 0;
+      lobbyEl.classList.add("lobby-hidden");
+      closeDialogue();
+    },
+  },
+  // Wipes the save (unlocked spells + the persisted world seed) and
+  // reloads — the simplest way to guarantee every bit of derived state
+  // (village gate, biome layout, everything) actually starts fresh rather
+  // than trying to hand-reset it all in place.
+  reset: {
+    argOptions: () => [],
+    run() {
+      try {
+        localStorage.removeItem(UNLOCK_STORAGE_KEY);
+        localStorage.removeItem(WORLD_SEED_KEY);
+      } catch {
+        // Nothing to clear if storage was never available.
+      }
+      window.location.reload();
+    },
+  },
+};
+
+// Command-name completions with no argument yet, or that command's own
+// argOptions() once a space has been typed — either way prefix-filtered
+// against whatever's typed so far.
+function computeDevConsoleSuggestions(raw) {
+  const text = raw.replace(/^\//, "");
+  const spaceIdx = text.indexOf(" ");
+  if (spaceIdx === -1) {
+    const prefix = text.toLowerCase();
+    return Object.keys(DEV_COMMANDS).filter((c) => c.startsWith(prefix)).map((c) => "/" + c);
+  }
+  const cmdName = text.slice(0, spaceIdx).toLowerCase();
+  const cmd = DEV_COMMANDS[cmdName];
+  if (!cmd) return [];
+  const argPrefix = text.slice(spaceIdx + 1).toLowerCase();
+  return cmd.argOptions().filter((a) => a.startsWith(argPrefix)).map((a) => `/${cmdName} ${a}`);
+}
+
+function renderDevConsoleSuggestions() {
+  devConsoleSuggestionsEl.textContent = "";
+  devConsoleSuggestions.forEach((s, i) => {
+    const row = document.createElement("div");
+    row.className = "dev-console-suggestion" + (i === devConsoleSuggestionIndex ? " active" : "");
+    row.textContent = s;
+    devConsoleSuggestionsEl.appendChild(row);
+  });
+}
+
+function openDevConsole() {
+  devConsoleOpen = true;
+  for (const key of Object.keys(keys)) keys[key] = false; // don't leave movement stuck held while typing
+  devConsoleEl.classList.remove("hidden");
+  devConsoleInputEl.value = "/";
+  devConsoleInputEl.focus();
+  devConsoleSuggestions = computeDevConsoleSuggestions("/");
+  devConsoleSuggestionIndex = -1;
+  renderDevConsoleSuggestions();
+}
+
+function closeDevConsole() {
+  devConsoleOpen = false;
+  devConsoleEl.classList.add("hidden");
+  devConsoleInputEl.blur();
+}
+
+function runDevConsoleCommand(raw) {
+  const text = raw.trim().replace(/^\//, "");
+  if (!text) return;
+  const [cmdName, ...args] = text.split(/\s+/);
+  const cmd = DEV_COMMANDS[cmdName.toLowerCase()];
+  if (cmd) cmd.run(args);
+}
+
+devConsoleInputEl.addEventListener("input", () => {
+  devConsoleSuggestions = computeDevConsoleSuggestions(devConsoleInputEl.value);
+  devConsoleSuggestionIndex = -1;
+  renderDevConsoleSuggestions();
+});
+
+devConsoleInputEl.addEventListener("keydown", (e) => {
+  // Stops the game's own global keydown handler (WASD, Shift-cast, the "/"
+  // that opened this in the first place, etc.) from ever seeing whatever's
+  // typed in here — this listener runs first in the bubble phase since
+  // it's on the input itself.
+  e.stopPropagation();
+
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeDevConsole();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const chosen = devConsoleSuggestionIndex >= 0 ? devConsoleSuggestions[devConsoleSuggestionIndex] : devConsoleInputEl.value;
+    runDevConsoleCommand(chosen);
+    closeDevConsole();
+  } else if (e.key === "Tab") {
+    e.preventDefault();
+    if (devConsoleSuggestions.length === 0) return;
+    const pick = devConsoleSuggestions[Math.max(0, devConsoleSuggestionIndex)];
+    devConsoleInputEl.value = pick + (pick.trim().split(" ").length === 1 ? " " : "");
+    devConsoleSuggestions = computeDevConsoleSuggestions(devConsoleInputEl.value);
+    devConsoleSuggestionIndex = -1;
+    renderDevConsoleSuggestions();
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (devConsoleSuggestions.length === 0) return;
+    devConsoleSuggestionIndex = (devConsoleSuggestionIndex + 1) % devConsoleSuggestions.length;
+    renderDevConsoleSuggestions();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (devConsoleSuggestions.length === 0) return;
+    devConsoleSuggestionIndex = (devConsoleSuggestionIndex - 1 + devConsoleSuggestions.length) % devConsoleSuggestions.length;
+    renderDevConsoleSuggestions();
+  }
+});
 
 // --- World generation (deferred) --------------------------------------------
 
@@ -3413,11 +3618,6 @@ function loop(now) {
       lobbyEl.classList.remove("lobby-hidden");
       lobbyReturnVillageBtn.classList.toggle("hidden", currentArea !== "world");
       Sound.menuOpen();
-      // Player.update() (which drives the walking rustle) stops running
-      // while the menu is open — without this, the rustle would keep
-      // looping at whatever gain it was mid-fade to if the menu opened
-      // while the player was still moving.
-      Sound.setWalking(false);
     } else if (nearbyNpc) {
       openDialogue(nearbyNpc);
     } else if (nearRune) {
@@ -3432,7 +3632,7 @@ function loop(now) {
   }
 
   const menuOpen = !lobbyEl.classList.contains("lobby-hidden");
-  const uiBlocking = menuOpen || !!activeDialogue;
+  const uiBlocking = menuOpen || !!activeDialogue || devConsoleOpen;
 
   if (uiBlocking) {
     interactPromptEl.classList.add("hidden");

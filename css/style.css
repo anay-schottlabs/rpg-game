@@ -609,3 +609,55 @@ html, body {
   filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4));
   z-index: 15;
 }
+
+/* Dev command console — deliberately styled like a debug overlay (monospace,
+   near-black) rather than the game's own parchment/wood UI, so it always
+   reads as a dev tool and never as part of the story. */
+#dev-console {
+  position: absolute;
+  left: 50%;
+  bottom: 90px;
+  transform: translateX(-50%);
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  font-family: "Courier New", monospace;
+  z-index: 40;
+}
+
+#dev-console-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  background: rgba(10, 10, 14, 0.92);
+  border: 2px solid #4a4a4a;
+  border-radius: 6px;
+  color: #d8f0d8;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+#dev-console-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.dev-console-suggestion {
+  background: rgba(10, 10, 14, 0.88);
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 4px 10px;
+  color: #9ad89a;
+  font-size: 13px;
+}
+
+.dev-console-suggestion.active {
+  background: rgba(60, 100, 60, 0.9);
+  border-color: #6a9a6a;
+  color: #eaffea;
+}
