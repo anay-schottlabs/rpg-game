@@ -52,6 +52,88 @@ for (let i = 0; i < 150; i++) {
   });
 }
 
+// A single low-frequency noise field drives how lush or barren any given
+// patch of ground is, so foliage naturally clumps into meadows and clearings
+// instead of spraying evenly across the whole map.
+const terrainNoise = WorldGen.createValueNoise2D();
+
+// --- Foliage -----------------------------------------------------------------
+
+function pickFoliageType() {
+  const r = Math.random();
+  if (r < 0.08) return "bush";
+  if (r < 0.45) return "tallGrass";
+  if (r < 0.75) return "fern";
+  return "flowers";
+}
+
+const foliage = [];
+for (const pt of WorldGen.scatterPatchy({
+  worldWidth: WORLD_WIDTH,
+  worldHeight: WORLD_HEIGHT,
+  attempts: 650,
+  noiseFn: terrainNoise,
+  noiseScale: 260,
+  threshold: 0.42,
+})) {
+  foliage.push({ x: pt.x, y: pt.y, type: pickFoliageType(), scale: 0.7 + Math.random() * 0.5, flip: Math.random() < 0.5 });
+}
+
+// A few tight flower clusters layered on top of the noise-driven spread —
+// flowers tend to bloom in small clumps rather than singly.
+for (const pt of WorldGen.scatterClusters({
+  worldWidth: WORLD_WIDTH,
+  worldHeight: WORLD_HEIGHT,
+  clusterCount: 8,
+  itemsPerCluster: { min: 3, max: 6 },
+  clusterRadius: 40,
+})) {
+  foliage.push({ x: pt.x, y: pt.y, type: "flowers", scale: 0.7 + Math.random() * 0.4, flip: Math.random() < 0.5 });
+}
+
+// --- Mushrooms -----------------------------------------------------------------
+
+function pickMushroomType() {
+  const r = Math.random();
+  if (r < 0.35) return "redCap";
+  if (r < 0.65) return "tawnyCap";
+  if (r < 0.85) return "blueCap";
+  return "cluster";
+}
+
+const mushrooms = [];
+for (const pt of WorldGen.scatterClusters({
+  worldWidth: WORLD_WIDTH,
+  worldHeight: WORLD_HEIGHT,
+  clusterCount: 12,
+  itemsPerCluster: { min: 2, max: 4 },
+  clusterRadius: 30,
+  soloCount: 18,
+})) {
+  mushrooms.push({ x: pt.x, y: pt.y, type: pickMushroomType(), scale: 0.8 + Math.random() * 0.5, flip: Math.random() < 0.5 });
+}
+
+// --- Rocks -----------------------------------------------------------------------
+
+function pickRockVariant() {
+  const r = Math.random();
+  const size = r < 0.55 ? "small" : r < 0.85 ? "medium" : "large";
+  const pool = ForestAssets.rocks.filter((v) => v.size === size);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+const rocks = [];
+for (const pt of WorldGen.scatterClusters({
+  worldWidth: WORLD_WIDTH,
+  worldHeight: WORLD_HEIGHT,
+  clusterCount: 14,
+  itemsPerCluster: { min: 2, max: 5 },
+  clusterRadius: 45,
+  soloCount: 22,
+})) {
+  rocks.push({ x: pt.x, y: pt.y, variant: pickRockVariant(), scale: 0.7 + Math.random() * 0.6, flip: Math.random() < 0.5 });
+}
+
 // --- Player ------------------------------------------------------------------
 
 class Player {
@@ -172,6 +254,44 @@ function drawTree(tree, camera) {
   }
 }
 
+// Shared by foliage, mushrooms, and rocks: they're all just an image anchored
+// to a world point, optionally mirrored for extra variety from a small pool
+// of source assets.
+function drawGroundSprite(asset, item, camera) {
+  const width = asset.width * item.scale;
+  const height = asset.height * item.scale;
+  const screenX = item.x - camera.x;
+  const screenY = item.y - camera.y;
+
+  if (
+    screenX < -width || screenX > canvas.width + width ||
+    screenY < -height || screenY > canvas.height + height
+  ) {
+    return; // cull off-screen
+  }
+
+  const img = asset.image;
+  if (!(img.complete && img.naturalWidth > 0)) return;
+
+  ctx.save();
+  ctx.translate(screenX, screenY);
+  if (item.flip) ctx.scale(-1, 1);
+  ctx.drawImage(img, -width / 2, -height * asset.groundFraction, width, height);
+  ctx.restore();
+}
+
+function drawFoliage(item, camera) {
+  drawGroundSprite(ForestAssets.foliage[item.type], item, camera);
+}
+
+function drawMushroom(item, camera) {
+  drawGroundSprite(ForestAssets.mushrooms[item.type], item, camera);
+}
+
+function drawRock(item, camera) {
+  drawGroundSprite(item.variant, item, camera);
+}
+
 // --- Game loop -----------------------------------------------------------------
 
 let lastTime = performance.now();
@@ -185,14 +305,27 @@ function loop(now) {
 
   drawGround();
 
-  // Depth-sort trees and the player by ground position so the player can
-  // walk in front of or behind a tree canopy convincingly.
-  const drawables = [
-    ...trees.map((tree) => ({ y: tree.y, draw: () => drawTree(tree, camera) })),
-    { y: player.y, draw: () => player.draw(ctx, camera) },
-  ];
+  // Depth-sort every ground object and the player by world y so the player
+  // (and taller decoration) can convincingly pass in front of or behind
+  // shorter/closer objects.
+  const drawables = [];
+  for (const tree of trees) drawables.push({ y: tree.y, kind: "tree", item: tree });
+  for (const item of foliage) drawables.push({ y: item.y, kind: "foliage", item });
+  for (const item of mushrooms) drawables.push({ y: item.y, kind: "mushroom", item });
+  for (const item of rocks) drawables.push({ y: item.y, kind: "rock", item });
+  drawables.push({ y: player.y, kind: "player", item: null });
+
   drawables.sort((a, b) => a.y - b.y);
-  for (const item of drawables) item.draw();
+
+  for (const d of drawables) {
+    switch (d.kind) {
+      case "tree": drawTree(d.item, camera); break;
+      case "foliage": drawFoliage(d.item, camera); break;
+      case "mushroom": drawMushroom(d.item, camera); break;
+      case "rock": drawRock(d.item, camera); break;
+      case "player": player.draw(ctx, camera); break;
+    }
+  }
 
   requestAnimationFrame(loop);
 }
