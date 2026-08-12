@@ -1815,18 +1815,28 @@ function generateBiomes() {
   insertIntoRenderGrid("biomeFoliage", biomeFoliage);
 }
 
+// Enemies per 1,000,000 px², same area-derived approach as the tree/
+// foliage density constants — a flat headcount (the original 3-per-biome)
+// stopped making sense once the world's area grew ~35x; this keeps
+// encounter frequency consistent regardless of how big the world is tuned
+// to be.
+const GOLEM_DENSITY = 0.13;
+const BIOME_ENEMY_DENSITY = 0.13;
+
 function spawnEnemies() {
   enemies = [];
 
   // Woodland Grove's golems stay within the inner disk, same spawn band as
   // before (just capped short of the biome boundary instead of the old
   // full-world wall).
-  spawnEnemyGroup("golem", 3, () => sampleAnnulus(CLEARING_RADIUS + 300, BIOME_INNER_RADIUS - 150));
+  const golemArea = annulusArea(CLEARING_RADIUS + 300, BIOME_INNER_RADIUS - 150);
+  spawnEnemyGroup("golem", densityCount(GOLEM_DENSITY, golemArea), () => sampleAnnulus(CLEARING_RADIUS + 300, BIOME_INNER_RADIUS - 150));
 
   for (let i = 0; i < OUTER_BIOMES.length; i++) {
     const biome = OUTER_BIOMES[i];
     const { angleStart, angleEnd } = biomeSectorAngles(i);
-    spawnEnemyGroup(biome.enemyKind, 3, () => sampleSectorAnnulus(BIOME_INNER_RADIUS + 150, WALL_START, angleStart, angleEnd));
+    const sectorArea = annulusArea(BIOME_INNER_RADIUS + 150, WALL_START, angleEnd - angleStart);
+    spawnEnemyGroup(biome.enemyKind, densityCount(BIOME_ENEMY_DENSITY, sectorArea), () => sampleSectorAnnulus(BIOME_INNER_RADIUS + 150, WALL_START, angleStart, angleEnd));
   }
 }
 
