@@ -645,12 +645,15 @@ const ForestAssets = (() => {
       armRLower: { kind: "polygon", points: limbCapsule(152, 163, 150, 188, 8), fill: "#4a5a7a" },
       handR: { kind: "ellipse", center: { x: 150, y: 191 }, rx: 9, ry: 9, fill: "#e8c9a0" },
 
-      weaponShaft: { kind: "polygon", points: limbCapsule(150, 191, 168, 100, 3), fill: "#5a4530" },
+      // Sized up from the design doc's own proportions (longer shaft,
+      // wider/taller gem) so the weapon reads clearly at the player's small
+      // on-screen scale — see PLAYER_RIG_SCALE's comment in game.js.
+      weaponShaft: { kind: "polygon", points: limbCapsule(150, 191, 168, 88, 4.5), fill: "#5a4530" },
       weaponGem: {
         kind: "polygon",
         points: [
-          ...sampleQuadratic({ x: 168, y: 100 }, { x: 150, y: 70 }, { x: 168, y: 45 }, 6),
-          ...sampleQuadratic({ x: 168, y: 45 }, { x: 186, y: 70 }, { x: 168, y: 100 }, 6).slice(1),
+          ...sampleQuadratic({ x: 168, y: 88 }, { x: 140, y: 55 }, { x: 168, y: 28 }, 6),
+          ...sampleQuadratic({ x: 168, y: 28 }, { x: 196, y: 55 }, { x: 168, y: 88 }, 6).slice(1),
         ],
         fill: "#bcdfe8",
       },
@@ -693,7 +696,7 @@ const ForestAssets = (() => {
       torso: { segments: ["torso", "torsoClasp"], pivot: { x: 100, y: 115 } },
       head: { segments: ["head", "hatBrim", "hatCone", "hatBand", "hatGem"], pivot: { x: 100, y: 112 } },
     },
-    weaponGlowCenter: { x: 168, y: 110 }, // drawn as a radial gradient in game.js, not a flat-fill segment
+    weaponGlowCenter: { x: 168, y: 58 }, // drawn as a radial gradient in game.js, not a flat-fill segment
     groundAnchor: { x: 100, y: 308 },
   };
 

@@ -1198,6 +1198,40 @@ const WEAPON_SWING_DURATION = 0.3;
 const WEAPON_SWING_BACK = 0.6; // radians pulled back during windup
 const WEAPON_SWING_FORWARD = 1.1; // radians swept forward during the strike
 
+// Melee hit check — a single damage pulse per swing, applied the instant
+// the strike phase begins (same "resolve on windup-complete" moment every
+// enemy attack already uses, see updateEnemy()) rather than every frame the
+// blade happens to overlap something, so a swing can't multi-hit one enemy
+// just by lingering nearby.
+const WEAPON_DAMAGE = 18;
+const WEAPON_RANGE = 78;
+const WEAPON_HIT_ARC = Math.PI * 0.8; // total cone width in front of the player
+
+function resolveWeaponHit() {
+  if (player.swingTimeLeft <= 0 || player.hitThisSwing) return;
+  if (WEAPON_SWING_DURATION - player.swingTimeLeft < WEAPON_SWING_WINDUP) return; // still winding up
+  player.hitThisSwing = true;
+
+  const facingAngle = Math.atan2(player.facingY, player.facingX);
+  for (const enemy of enemies) {
+    if (enemy.state === "dead") continue;
+    const dx = enemy.x - player.x, dy = enemy.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > WEAPON_RANGE) continue;
+    let angleDiff = Math.abs(Math.atan2(dy, dx) - facingAngle);
+    if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
+    if (angleDiff > WEAPON_HIT_ARC / 2) continue;
+
+    enemy.health -= WEAPON_DAMAGE;
+    if (enemy.health <= 0) {
+      killEnemy(enemy);
+      Sound.enemyDeath();
+    } else {
+      Sound.enemyTakeDamage();
+    }
+  }
+}
+
 function computeWeaponSwingAngle(state) {
   if (state.swingTimeLeft <= 0) return 0;
   const elapsed = WEAPON_SWING_DURATION - state.swingTimeLeft;
@@ -1289,10 +1323,10 @@ function drawPlayerCharacter(ctx, camera, state) {
 
     const glowWorld = playerLocalToWorld(rotateAround(rig.weaponGlowCenter, weapon.pivot, angles.weapon), state, flip);
     const gx = glowWorld.x - camera.x, gy = glowWorld.y - camera.y;
-    const glowR = 7 * PLAYER_RIG_SCALE * 4.5;
+    const glowR = 9 * PLAYER_RIG_SCALE * 6;
     const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, glowR);
-    grad.addColorStop(0, "rgba(200, 235, 235, 0.7)");
-    grad.addColorStop(1, "rgba(200, 235, 235, 0)");
+    grad.addColorStop(0, "rgba(210, 240, 240, 0.85)");
+    grad.addColorStop(1, "rgba(210, 240, 240, 0)");
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.arc(gx, gy, glowR, 0, Math.PI * 2);
@@ -1324,6 +1358,7 @@ class Player {
     this.hasWeapon = false; // granted by the Elder — see NPC_DEFS
     this.animPhase = 0;
     this.swingTimeLeft = 0;
+    this.hitThisSwing = false; // resolveWeaponHit()'s once-per-swing guard
   }
 
   takeDamage(amount) {
@@ -1337,6 +1372,7 @@ class Player {
   triggerSwing() {
     if (!this.hasWeapon || this.swingTimeLeft > 0) return;
     this.swingTimeLeft = WEAPON_SWING_DURATION;
+    this.hitThisSwing = false;
   }
 
   update(dt) {
@@ -3663,6 +3699,7 @@ function loop(now) {
   // Combat/hazard simulation is local-only (not part of the multiplayer
   // sync) and pauses along with the player while a menu/dialogue is open.
   if (!uiBlocking) {
+    resolveWeaponHit();
     updateEnemies(dt);
     updateProjectiles(dt);
     updateBossProjectiles(dt);
