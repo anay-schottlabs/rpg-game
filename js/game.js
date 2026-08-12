@@ -107,6 +107,7 @@ const SPELLS = [
   { name: "Gale Step", element: "wind", combo: ["up", "left", "right", "down", "down", "up"] },
   { name: "Rockfall", element: "earth", combo: ["down", "down", "right", "up"] },
   { name: "Gust Step", element: "wind", combo: ["left", "right"] },
+  { name: "Earth Breaker", element: "earth", combo: ["down", "left", "down"] },
 ];
 
 const ARROW_KEY_TO_DIR = { arrowup: "up", arrowdown: "down", arrowleft: "left", arrowright: "right" };
@@ -145,6 +146,7 @@ function stopCasting() {
   if (cast) {
     flashSigil(cast.element);
     triggerSpellEffect(cast.name);
+    Sound.cast(cast.element);
   }
   castSequence = [];
 }
@@ -172,6 +174,9 @@ function triggerSpellEffect(spellName) {
       break;
     case "Gust Step":
       castGustStep();
+      break;
+    case "Earth Breaker":
+      castEarthBreaker();
       break;
   }
 }
@@ -213,14 +218,14 @@ window.keys = keys;
 // WORLD_RADIUS (see PLAYER_MAX_RADIUS), so there's always a deep band of
 // forest between the player and the true edge — approaching the boundary
 // reads as "the trees get thicker," never as a hard stop into empty ground.
-const WORLD_RADIUS = 2700;
+const WORLD_RADIUS = 16200;
 const WORLD_CENTER = { x: WORLD_RADIUS, y: WORLD_RADIUS };
-const PLAYER_MAX_RADIUS = 2400;
+const PLAYER_MAX_RADIUS = 14400;
 
-const CLEARING_RADIUS = 260; // no trees inside this ring around the campfire
-const RING_END = 420; // trees ramp up to full density by this radius
-const WALL_START = 2150; // the dense boundary forest begins here
-const WALL_END = 3300; // extends well past WORLD_RADIUS so wide screens never see past it
+const CLEARING_RADIUS = 300; // no trees inside this ring around the campfire
+const RING_END = 550; // trees ramp up to full density by this radius
+const WALL_START = 12900; // the dense boundary forest begins here
+const WALL_END = 19800; // extends well past WORLD_RADIUS so wide screens never see past it
 
 const CAMPFIRE_INTERACT_RADIUS = 130; // how close the player must be to open the menu with F — wide enough that the player spawns inside it, so the prompt is visible immediately
 
@@ -269,6 +274,22 @@ function scatterWithDensity({ count, maxAttempts, sample, densityAt, footprintRa
     results.push(item);
   }
   return results;
+}
+
+// Area of an annular wedge (rMin..rMax, angularWidth radians wide — a full
+// circle by default). Used to turn a target density into a raw item count.
+function annulusArea(rMin, rMax, angularWidth = Math.PI * 2) {
+  return 0.5 * (rMax * rMax - rMin * rMin) * angularWidth;
+}
+
+// Converts "items per 1,000,000 px²" into a raw count for scatterWithDensity.
+// The actual tuning knob for how crowded an area feels is the density
+// constant passed in, not a magic count tied to one particular world size —
+// so density stays visually consistent no matter how big the sampled area
+// is (important now that the world spans many biomes of very different
+// sizes, and can be resized without every count needing to be re-tuned).
+function densityCount(densityPerMillionPx2, area) {
+  return Math.max(0, Math.round((densityPerMillionPx2 * area) / 1_000_000));
 }
 
 // --- Water -------------------------------------------------------------------
@@ -609,6 +630,94 @@ function drawObstacles(camera) {
   }
 }
 
+// --- Earth Breaker (spell-created) ------------------------------------------
+
+// Crushes every "earth" scatter object (rocks, and the rock-like scree/
+// stalagmite biome ground details) within range of the caster. Each one
+// that shatters checks for others nearby and schedules them to shatter a
+// beat later, so a cluster (and especially a roughly linear run of them)
+// visibly detonates outward in a chain rather than all at once. Trees,
+// foliage, and mushrooms are untouched — only genuinely rock/earth objects
+// qualify.
+// Sized against how far apart rocks actually land at the current world
+// scale (median nearest-neighbor distance is a few hundred px) — wide
+// enough that a genuinely nearby scatter of rocks reliably chains, without
+// reaching all the way out to unrelated, far-off ones.
+const EARTH_BREAKER_CAST_RADIUS = 420; // initial crush radius around the caster
+const EARTH_BREAKER_CHAIN_RADIUS = 380; // how far one shatter can trigger the next
+const EARTH_BREAKER_CHAIN_DELAY_MS = 140; // domino timing between chain links
+const EARTH_BREAKER_DAMAGE_RADIUS = 160; // AoE hit radius around each shatter
+const EARTH_BREAKER_DAMAGE = 22;
+
+let pendingEarthShatters = []; // [{ entry, triggerAt, chainIndex }]
+
+// Every not-yet-destroyed earth object in the world, in the same
+// {kind, item} shape renderGrid entries use — kept as a plain scan (not a
+// spatial lookup) since this only ever runs from a player-triggered cast,
+// not per frame.
+function collectEarthAssets() {
+  const list = [];
+  for (const item of rocks) {
+    if (!item.destroyed) list.push({ kind: "rock", item });
+  }
+  for (const item of biomeFoliage) {
+    if (!item.destroyed && (item.type === "scree" || item.type === "stalagmite")) list.push({ kind: "biomeFoliage", item });
+  }
+  return list;
+}
+
+function scheduleEarthShatter(entry, delayMs, chainIndex) {
+  entry.item.chainScheduled = true;
+  pendingEarthShatters.push({ entry, triggerAt: performance.now() + delayMs, chainIndex });
+}
+
+function explodeEarthAsset(entry, chainIndex) {
+  entry.item.destroyed = true;
+  const x = entry.item.x;
+  const y = entry.item.y;
+  spawnEffect(x, y, "earthImpact", 0.45, entry.item.scale * 1.3);
+  Sound.earthShatter(chainIndex);
+
+  for (const enemy of enemies) {
+    if (enemy.state === "dead") continue;
+    if (Math.hypot(enemy.x - x, enemy.y - y) >= EARTH_BREAKER_DAMAGE_RADIUS) continue;
+    enemy.health -= EARTH_BREAKER_DAMAGE;
+    if (enemy.health <= 0) {
+      killEnemy(enemy);
+      Sound.enemyDeath();
+    } else {
+      Sound.enemyTakeDamage();
+    }
+  }
+
+  // Chain reaction: any not-yet-scheduled earth object nearby goes off a
+  // beat later, continuing the chain from itself once it does.
+  for (const other of collectEarthAssets()) {
+    if (other.item === entry.item || other.item.chainScheduled) continue;
+    if (Math.hypot(other.item.x - x, other.item.y - y) < EARTH_BREAKER_CHAIN_RADIUS) {
+      scheduleEarthShatter(other, EARTH_BREAKER_CHAIN_DELAY_MS, chainIndex + 1);
+    }
+  }
+}
+
+function castEarthBreaker() {
+  for (const entry of collectEarthAssets()) {
+    if (Math.hypot(entry.item.x - player.x, entry.item.y - player.y) < EARTH_BREAKER_CAST_RADIUS) {
+      entry.item.chainScheduled = true;
+      explodeEarthAsset(entry, 0);
+    }
+  }
+}
+
+function updatePendingEarthShatters(now) {
+  for (let i = pendingEarthShatters.length - 1; i >= 0; i--) {
+    const pending = pendingEarthShatters[i];
+    if (now < pending.triggerAt) continue;
+    pendingEarthShatters.splice(i, 1);
+    if (!pending.entry.item.destroyed) explodeEarthAsset(pending.entry, pending.chainIndex);
+  }
+}
+
 // --- Ice bridge (spell-created) ---------------------------------------------
 
 const ICE_BRIDGE_DURATION_MS = 30000;
@@ -649,6 +758,7 @@ function castTideCall() {
     pool.depleted = true;
     pool.regenAt = performance.now() + HEALING_POOL_REGEN_MS;
     spawnEffect(player.x, player.y, "healBurst", 0.8);
+    Sound.heal();
     return;
   }
   if (isNearWater(player.x, player.y, WATER_SPELL_RANGE)) {
@@ -745,6 +855,7 @@ function drawHealingPools(camera) {
 // --- Player movement & rendering (shared with multiplayer) -----------------
 
 const PLAYER_BASE_SPEED = 220; // pixels per second
+const FOOTSTEP_DISTANCE = 42; // px walked between footstep sounds
 // Gust Step (design doc's Movement Abilities section) — cast like any other
 // spell (see SPELLS below); castGustStep() just arms this burst rather than
 // it triggering off a held movement key.
@@ -813,6 +924,7 @@ function castGustStep() {
   player.dashTimeLeft = DASH_DURATION;
   moveWithCollision(player, player.facingX, player.facingY, DASH_DISTANCE);
   clampToWorld(player);
+  Sound.dash();
 }
 
 // Shared visual for any player-shaped thing: the local player, or a remote
@@ -874,11 +986,9 @@ class Player {
     this.isCasting = false;
     this.maxHealth = 100;
     this.health = 100;
+    this.footstepDist = 0; // distance walked since the last footstep sound
   }
 
-  // Nothing currently deals damage or heals — these exist so the health bar
-  // is wired to real, live state rather than a static image, ready for
-  // whatever ends up calling them (combat, hazards, etc).
   takeDamage(amount) {
     this.health = Math.max(0, this.health - amount);
   }
@@ -893,7 +1003,18 @@ class Player {
       dy: (keys.s ? 1 : 0) - (keys.w ? 1 : 0),
       e: keys.e,
     };
+    const prevX = this.x;
+    const prevY = this.y;
     simulatePlayerMovement(this, input, dt);
+
+    // Footsteps: one every FOOTSTEP_DISTANCE of actual travel, regardless of
+    // dt — ties the cue to distance covered rather than a fixed timer so it
+    // doesn't fire while blocked against water/an obstacle.
+    this.footstepDist += Math.hypot(this.x - prevX, this.y - prevY);
+    if (this.footstepDist >= FOOTSTEP_DISTANCE) {
+      this.footstepDist = 0;
+      Sound.footstep();
+    }
   }
 
   draw(ctx, camera) {
@@ -1022,6 +1143,7 @@ function updateEnemy(enemy, dt) {
       enemy.attackWindup -= dt;
       if (enemy.attackWindup <= 0 && distToPlayer <= type.attackRange + 20) {
         player.takeDamage(type.attackDamage);
+        Sound.enemyHitPlayer();
       }
     }
     if (enemy.attackCooldown <= 0) {
@@ -1046,6 +1168,7 @@ function updateEnemy(enemy, dt) {
       enemy.attackCooldown = type.attackCooldown;
       enemy.facingX = (player.x - enemy.x) / (distToPlayer || 1);
       enemy.facingY = (player.y - enemy.y) / (distToPlayer || 1);
+      Sound.enemyAttackWindup();
     } else {
       const dx = (player.x - enemy.x) / (distToPlayer || 1);
       const dy = (player.y - enemy.y) / (distToPlayer || 1);
@@ -1514,33 +1637,40 @@ function drawEnemy(enemy, camera) {
 // --- Biomes ----------------------------------------------------------------
 
 // Woodland Grove (the existing forest — trees/foliage/mushrooms/rocks/
-// ambient generated below in generateWorld()) occupies the inner disk; the
-// five outlying biomes from the design doc each get one angular wedge of
-// the annulus beyond it, out to the world's boundary wall. The wedge order
-// is rotated by a random-but-seeded base angle each world generation so the
+// ambient generated in generateWorld()) occupies the inner disk; the five
+// outlying biomes from the design doc each get one angular wedge of the
+// annulus beyond it, out to the world's boundary wall. The wedge order is
+// rotated by a random-but-seeded base angle each world generation so the
 // layout varies between sessions while staying identical for every player
 // in the same multiplayer game.
-const BIOME_INNER_RADIUS = 1300;
+//
+// Every boundary — the Grove/biome seam and the seam between neighboring
+// biomes — blends rather than cuts: both sides of a seam keep scattering
+// their own content a little way into the other's territory, fading out
+// with distance past the line, so the two sets of foliage visually mingle
+// instead of stopping at a drawn edge. See groveOuterFade() above and
+// biomeAngularWeight()/pointWeight() below.
+const BIOME_INNER_RADIUS = 7800;
 
 const OUTER_BIOMES = [
   {
     id: "marshBog", enemyKind: "mireLeech", groundColor: "#48513c",
-    treeKey: "cypress", treeChance: 0.5,
+    treeKey: "cypress", treeDensityMul: 0.8, foliageDensityMul: 1.1,
     pickFoliage: () => (RNG.random() < 0.82 ? "reedCluster" : "mudPool"),
   },
   {
     id: "mountainFoothills", enemyKind: "cragRam", groundColor: "#767469",
-    treeKey: "windBentPine", treeChance: 0.4,
+    treeKey: "windBentPine", treeDensityMul: 0.5, foliageDensityMul: 0.55,
     pickFoliage: () => (RNG.random() < 0.7 ? "alpineTuft" : "scree"),
   },
   {
     id: "frostfallTundra", enemyKind: "frostWisp", groundColor: "#cfe0e4",
-    treeKey: "snowPine", treeChance: 0.55,
+    treeKey: "snowPine", treeDensityMul: 0.85, foliageDensityMul: 0.5,
     pickFoliage: () => (RNG.random() < 0.6 ? "frozenShrub" : "snowdrift"),
   },
   {
     id: "sunmeadowClearing", enemyKind: "bramblingBoar", groundColor: "#a39a4a",
-    treeKey: null,
+    treeKey: null, treeDensityMul: 0, foliageDensityMul: 1.25,
     pickFoliage: () => {
       const r = RNG.random();
       if (r < 0.35) return "wildflowerPatch";
@@ -1550,7 +1680,7 @@ const OUTER_BIOMES = [
   },
   {
     id: "hollowDeep", enemyKind: "crystalCrawler", groundColor: "#241c30",
-    treeKey: null,
+    treeKey: null, treeDensityMul: 0, foliageDensityMul: 0.65,
     pickFoliage: () => {
       const r = RNG.random();
       if (r < 0.45) return "glowingFungus";
@@ -1561,6 +1691,26 @@ const OUTER_BIOMES = [
 ];
 const BIOME_SECTOR_SIZE = (Math.PI * 2) / OUTER_BIOMES.length;
 
+// Baseline biome tree/foliage density (per million px²) that each biome
+// scales via its own *DensityMul, and how far a biome's content can bleed
+// into a neighboring sector before fading to nothing.
+const BASE_BIOME_TREE_DENSITY = 9;
+const BASE_BIOME_FOLIAGE_DENSITY = 13;
+const BIOME_ANGLE_BLEND = BIOME_SECTOR_SIZE * 0.22;
+
+// Extra tree/foliage layer that fades in toward the world's true edge —
+// the biome-side equivalent of the Grove's own boundary thickening — kept
+// modest (additive, not a density multiplier) so the edge reads as
+// gradually thicker forest rather than a sudden wall of trees.
+const EDGE_THICKEN_WIDTH = 2500;
+const EDGE_THICKEN_DENSITY_FRAC = 0.7; // fraction of the base density added at the very edge
+
+function edgeThickenWeight(r) {
+  const start = WALL_END - EDGE_THICKEN_WIDTH;
+  if (r < start) return 0;
+  return Math.min(1, (r - start) / EDGE_THICKEN_WIDTH);
+}
+
 let biomeBaseAngle = 0;
 let biomeTrees = [];
 let biomeFoliage = [];
@@ -1568,6 +1718,26 @@ let biomeFoliage = [];
 function biomeSectorAngles(index) {
   const angleStart = biomeBaseAngle + index * BIOME_SECTOR_SIZE;
   return { angleStart, angleEnd: angleStart + BIOME_SECTOR_SIZE };
+}
+
+// Unwraps `theta` (any real angle, e.g. straight from atan2) to whichever
+// representative sits within π of `reference` — lets a sampled point's raw
+// angle be compared directly against a sector's angleStart/angleEnd, which
+// are expressed relative to biomeBaseAngle and can run well outside the
+// (-π, π] range atan2 returns.
+function angleNear(theta, reference) {
+  let a = theta;
+  while (a < reference - Math.PI) a += Math.PI * 2;
+  while (a > reference + Math.PI) a -= Math.PI * 2;
+  return a;
+}
+
+// 1 well inside [angleStart, angleEnd], fading to 0 by BIOME_ANGLE_BLEND
+// past either edge.
+function biomeAngularWeight(theta, angleStart, angleEnd) {
+  if (theta >= angleStart && theta <= angleEnd) return 1;
+  const past = theta < angleStart ? angleStart - theta : theta - angleEnd;
+  return Math.max(0, 1 - past / BIOME_ANGLE_BLEND);
 }
 
 function biomeTreeFootprintRadius(item) {
@@ -1583,40 +1753,65 @@ function generateBiomes() {
   biomeTrees = [];
   biomeFoliage = [];
 
+  const innerBlendStart = BIOME_INNER_RADIUS - GROVE_BLEND_WIDTH;
+
   for (let i = 0; i < OUTER_BIOMES.length; i++) {
     const biome = OUTER_BIOMES[i];
     const { angleStart, angleEnd } = biomeSectorAngles(i);
+    const wideStart = angleStart - BIOME_ANGLE_BLEND;
+    const wideEnd = angleEnd + BIOME_ANGLE_BLEND;
+    const sectorArea = annulusArea(innerBlendStart, WALL_END, wideEnd - wideStart);
 
-    if (biome.treeKey) {
+    // Combines the angular fade (this biome bleeding into its neighbors)
+    // with the radial fade (this biome bleeding into the Grove) into one
+    // 0..1 acceptance weight for a candidate point.
+    const pointWeight = (x, y) => {
+      const rawTheta = Math.atan2(y - WORLD_CENTER.y, x - WORLD_CENTER.x);
+      const theta = angleNear(rawTheta, (angleStart + angleEnd) / 2);
+      const angular = biomeAngularWeight(theta, angleStart, angleEnd);
+      const radial = 1 - groveOuterFade(distFromCenter(x, y));
+      return angular * radial;
+    };
+
+    if (biome.treeKey && biome.treeDensityMul > 0) {
+      const baseDensity = BASE_BIOME_TREE_DENSITY * biome.treeDensityMul;
       biomeTrees.push(...scatterWithDensity({
-        count: 260,
-        maxAttempts: 260 * 12,
-        sample: () => sampleSectorAnnulus(BIOME_INNER_RADIUS, WALL_START, angleStart, angleEnd),
+        count: densityCount(baseDensity, sectorArea),
+        maxAttempts: densityCount(baseDensity, sectorArea) * 15,
+        sample: () => sampleSectorAnnulus(innerBlendStart, WALL_END, wideStart, wideEnd),
+        densityAt: pointWeight,
         footprintRadius: biomeTreeFootprintRadius,
-        overlapAllowance: 0.75,
+        overlapAllowance: 1.0,
         build: (x, y) => ({ x, y, type: biome.treeKey, scale: 0.75 + RNG.random() * 0.5 }),
       }));
-      // Denser boundary band out at the world's true edge, same idea as the
-      // Woodland Grove's own wall — this biome's silhouette right up close.
+      // Extra layer fading in toward the world's true edge — a gradual
+      // thickening rather than a sudden denser band starting at WALL_START.
+      const edgeDensity = baseDensity * EDGE_THICKEN_DENSITY_FRAC;
       biomeTrees.push(...scatterWithDensity({
-        count: 480,
-        maxAttempts: 480 * 15,
-        sample: () => sampleSectorAnnulus(WALL_START, WALL_END, angleStart, angleEnd),
+        count: densityCount(edgeDensity, sectorArea),
+        maxAttempts: densityCount(edgeDensity, sectorArea) * 15,
+        sample: () => sampleSectorAnnulus(innerBlendStart, WALL_END, wideStart, wideEnd),
+        densityAt: (x, y) => pointWeight(x, y) * edgeThickenWeight(distFromCenter(x, y)),
         footprintRadius: biomeTreeFootprintRadius,
-        overlapAllowance: 0.42,
+        overlapAllowance: 1.0,
         build: (x, y) => ({ x, y, type: biome.treeKey, scale: 0.8 + RNG.random() * 0.5 }),
       }));
     }
 
+    const foliageDensity = BASE_BIOME_FOLIAGE_DENSITY * biome.foliageDensityMul;
     biomeFoliage.push(...scatterWithDensity({
-      count: 260,
-      maxAttempts: 260 * 12,
-      sample: () => sampleSectorAnnulus(BIOME_INNER_RADIUS, WALL_END, angleStart, angleEnd),
+      count: densityCount(foliageDensity, sectorArea),
+      maxAttempts: densityCount(foliageDensity, sectorArea) * 12,
+      sample: () => sampleSectorAnnulus(innerBlendStart, WALL_END, wideStart, wideEnd),
+      densityAt: pointWeight,
       footprintRadius: biomeFoliageFootprintRadius,
-      overlapAllowance: 0.55,
+      overlapAllowance: 0.85,
       build: (x, y) => ({ x, y, type: biome.pickFoliage(), scale: 0.8 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
     }));
   }
+
+  insertIntoRenderGrid("biomeTree", biomeTrees);
+  insertIntoRenderGrid("biomeFoliage", biomeFoliage);
 }
 
 function spawnEnemies() {
@@ -1634,27 +1829,85 @@ function spawnEnemies() {
   }
 }
 
-// Tints each outlying biome's ground as a donut-sector wedge from
-// BIOME_INNER_RADIUS out past the visible world, so the Woodland Grove's
-// disk stays plain forest green regardless of camera position while each
-// biome reads distinctly even at the far side of its own sector.
-const BIOME_WEDGE_OUTER_RADIUS = 8000;
+// Tints each outlying biome's ground, blended smoothly rather than as a
+// hard-edged wedge: a conic gradient handles the angular blend between
+// neighboring biomes (a plateau of pure color across most of each sector,
+// then a short ramp into the next), and a band of concentric alpha-stepped
+// rings handles the radial blend back into the Grove's plain green.
+const BIOME_WEDGE_OUTER_RADIUS = 40000;
+const BIOME_GROUND_RAMP_FRAC = 0.16; // fraction of a sector's angular width spent blending into the next biome
+const GROVE_GROUND_RING_STEPS = 22;
+
+// Conic gradients can't be told to blend across their own seam (the point
+// where offset 1.0 meets offset 0.0) — a stop list that assigns a color at
+// offset 0 and a different one near offset 1 always shows a hard cut right
+// there. Placing that seam in the middle of one biome's own plateau (via
+// `startAngle`, and splitting that one biome's plateau into the two pieces
+// that meet at 0 and 1) makes it invisible instead of avoiding it.
+function addBiomeGroundStops(gradient) {
+  const n = OUTER_BIOMES.length;
+  const sectorFrac = 1 / n;
+  const rampFrac = sectorFrac * BIOME_GROUND_RAMP_FRAC;
+  for (let i = 0; i < n; i++) {
+    const biome = OUTER_BIOMES[i];
+    const start = ((((i - 0.5) * sectorFrac + rampFrac) % 1) + 1) % 1;
+    const end = ((((i + 0.5) * sectorFrac - rampFrac) % 1) + 1) % 1;
+    if (start <= end) {
+      gradient.addColorStop(start, biome.groundColor);
+      gradient.addColorStop(end, biome.groundColor);
+    } else {
+      // This biome's plateau straddles the seam — split it into the piece
+      // ending at 0 and the piece starting at 1.
+      gradient.addColorStop(0, biome.groundColor);
+      gradient.addColorStop(end, biome.groundColor);
+      gradient.addColorStop(start, biome.groundColor);
+      gradient.addColorStop(1, biome.groundColor);
+    }
+  }
+}
 
 function drawBiomeGround(camera) {
   const cx = WORLD_CENTER.x - camera.x;
   const cy = WORLD_CENTER.y - camera.y;
-  for (let i = 0; i < OUTER_BIOMES.length; i++) {
-    const biome = OUTER_BIOMES[i];
-    const { angleStart, angleEnd } = biomeSectorAngles(i);
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(angleStart) * BIOME_WEDGE_OUTER_RADIUS, cy + Math.sin(angleStart) * BIOME_WEDGE_OUTER_RADIUS);
-    ctx.arc(cx, cy, BIOME_WEDGE_OUTER_RADIUS, angleStart, angleEnd, false);
-    ctx.lineTo(cx + Math.cos(angleEnd) * BIOME_INNER_RADIUS, cy + Math.sin(angleEnd) * BIOME_INNER_RADIUS);
-    ctx.arc(cx, cy, BIOME_INNER_RADIUS, angleEnd, angleStart, true);
-    ctx.closePath();
-    ctx.fillStyle = biome.groundColor;
-    ctx.fill();
+
+  const blendInner = BIOME_INNER_RADIUS - GROVE_BLEND_WIDTH;
+  const blendOuter = BIOME_INNER_RADIUS + GROVE_BLEND_WIDTH;
+
+  // Cheap perf guard: skip this whole pass if the entire visible viewport
+  // is comfortably inside the Grove — drawGround()'s plain green already
+  // covers that case, and this can be a meaningful chunk of every frame
+  // when it's not needed (a conic gradient plus ~24 ring fills).
+  const playerDist = distFromCenter(player.x, player.y);
+  const viewSpan = Math.max(canvas.width, canvas.height) / camera.zoom;
+  if (playerDist + viewSpan < blendInner) return;
+
+  const startAngle = biomeBaseAngle + BIOME_SECTOR_SIZE / 2;
+  const gradient = ctx.createConicGradient(startAngle, cx, cy);
+  addBiomeGroundStops(gradient);
+
+  ctx.save();
+  ctx.fillStyle = gradient;
+
+  // Beyond the blend band: one solid fill, fully opaque.
+  ctx.beginPath();
+  ctx.arc(cx, cy, BIOME_WEDGE_OUTER_RADIUS, 0, Math.PI * 2);
+  ctx.arc(cx, cy, blendOuter, 0, Math.PI * 2, true);
+  ctx.fill();
+
+  // Blend band: thin concentric rings stepping alpha 0 -> 1, so the seam
+  // with the Grove's plain green reads as a gradient instead of a line.
+  if (playerDist - viewSpan < blendOuter) {
+    for (let s = 0; s < GROVE_GROUND_RING_STEPS; s++) {
+      const t0 = s / GROVE_GROUND_RING_STEPS;
+      const t1 = (s + 1) / GROVE_GROUND_RING_STEPS;
+      ctx.globalAlpha = (t0 + t1) / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, blendInner + (blendOuter - blendInner) * t1, 0, Math.PI * 2);
+      ctx.arc(cx, cy, blendInner + (blendOuter - blendInner) * t0, 0, Math.PI * 2, true);
+      ctx.fill();
+    }
   }
+  ctx.restore();
 }
 
 function drawBiomeTree(item, camera) {
@@ -1662,6 +1915,7 @@ function drawBiomeTree(item, camera) {
 }
 
 function drawBiomeFoliage(item, camera) {
+  if (item.destroyed) return; // scree/stalagmite shattered by Earth Breaker — see castEarthBreaker()
   drawGroundSprite(ForestAssets.biomeFoliage[item.type], item, camera);
 }
 
@@ -1699,7 +1953,12 @@ function updateProjectiles(dt) {
       if (Math.hypot(p.x - enemy.x, p.y - enemy.y) < FIRE_BOLT_HIT_RADIUS) {
         enemy.health -= FIRE_BOLT_DAMAGE;
         spawnEffect(p.x, p.y, "fireImpact", 0.4);
-        if (enemy.health <= 0) killEnemy(enemy);
+        if (enemy.health <= 0) {
+          killEnemy(enemy);
+          Sound.enemyDeath();
+        } else {
+          Sound.enemyTakeDamage();
+        }
         hit = true;
         break;
       }
@@ -1728,8 +1987,8 @@ function drawProjectile(p, camera) {
 
 let effects = [];
 
-function spawnEffect(x, y, type, duration) {
-  effects.push({ x, y, type, age: 0, duration });
+function spawnEffect(x, y, type, duration, scale) {
+  effects.push({ x, y, type, age: 0, duration, scale });
 }
 
 function updateEffects(dt) {
@@ -1744,9 +2003,9 @@ function drawEffect(effect, camera) {
   const screenX = effect.x - camera.x;
   const screenY = effect.y - camera.y;
 
-  if (effect.type === "fireImpact") {
-    const asset = ForestAssets.spellEffects.fireImpact;
-    const scale = 0.7 + t * 0.5;
+  if (effect.type === "fireImpact" || effect.type === "earthImpact") {
+    const asset = ForestAssets.spellEffects[effect.type];
+    const scale = (0.7 + t * 0.5) * (effect.scale || 1);
     ctx.save();
     ctx.globalAlpha = Math.max(0, 1 - t);
     ctx.translate(screenX, screenY);
@@ -1852,9 +2111,23 @@ function castWindExplosion() {
 // which must be seeded first (solo play seeds it with real randomness;
 // hosting/joining seeds it with a shared value so everyone's world matches).
 // js/lobby.js calls window.startGame() once a mode has been chosen.
-let spatialIndex, terrainNoise;
+let spatialIndex, terrainNoise, renderGrid;
 let trees, foliage, mushrooms, rocks, ambientDetails;
 let campfire, player;
+
+// Cell size for renderGrid — coarse enough that a typical camera view only
+// touches a handful of cells, fine enough that a cell isn't wildly bigger
+// than the view itself. See createBucketGrid() in js/worldgen.js and its
+// use in loop() below.
+const RENDER_GRID_CELL_SIZE = 600;
+// Extra margin (world px) added around the strict viewport when querying
+// renderGrid, so a wide ground sprite anchored just off-screen still gets
+// drawn before it'd visibly pop in.
+const RENDER_VIEW_MARGIN = 400;
+
+function insertIntoRenderGrid(kind, list) {
+  for (const item of list) renderGrid.insert(item.x, item.y, { y: item.y, kind, item });
+}
 
 function pickTreeType() {
   const r = RNG.random();
@@ -1870,14 +2143,35 @@ function treeFootprintRadius(tree) {
   return ((ForestAssets.TREE_VIEWBOX.width * tree.scale) / 2) * 0.75;
 }
 
+// How far Woodland Grove content keeps thinning out past BIOME_INNER_RADIUS
+// (and how far each outer biome's own content starts thinning in before it)
+// — this overlap is what makes the Grove/biome seam read as a gradual
+// tree-line rather than a line on a map. See groveOuterFade() and the
+// biome-side mixing in generateBiomes() below.
+const GROVE_BLEND_WIDTH = 1200;
+
+// 1 well inside the Grove, fading to 0 by GROVE_BLEND_WIDTH past
+// BIOME_INNER_RADIUS. Referencing BIOME_INNER_RADIUS here (declared further
+// down, in the Biomes section) is safe — this function's body only runs
+// once generateWorld() is called, by which point every top-level const in
+// the file has already been initialized.
+function groveOuterFade(d) {
+  const fadeStart = BIOME_INNER_RADIUS - GROVE_BLEND_WIDTH;
+  const fadeEnd = BIOME_INNER_RADIUS + GROVE_BLEND_WIDTH;
+  if (d <= fadeStart) return 1;
+  if (d >= fadeEnd) return 0;
+  return 1 - (d - fadeStart) / (fadeEnd - fadeStart);
+}
+
 // Interior forest: absent inside the campfire clearing, fading in through a
 // ring just past it ("only a bit on the outside... circular formation"),
-// full density from there until the boundary wall begins.
+// full density through the interior, then fading back out into the biome
+// ring rather than stopping dead at BIOME_INNER_RADIUS.
 function treeRingDensity(x, y) {
   const d = distFromCenter(x, y);
   if (d < CLEARING_RADIUS) return 0;
-  if (d < RING_END) return (d - CLEARING_RADIUS) / (RING_END - CLEARING_RADIUS);
-  return 1;
+  const innerRamp = d < RING_END ? (d - CLEARING_RADIUS) / (RING_END - CLEARING_RADIUS) : 1;
+  return innerRamp * groveOuterFade(d);
 }
 
 function pickFoliageType() {
@@ -1933,8 +2227,24 @@ function ambientFootprintRadius(item) {
   return ((asset.width * item.scale) / 2) * 0.6;
 }
 
+// Target densities (items per 1,000,000 px²) for Woodland Grove content.
+// Kept well under the old flat counts' effective density — the old numbers
+// were tuned for a world 1/30th this area and read as cluttered/overlapping
+// once biomes made everything else denser too. overlapAllowance values are
+// likewise raised across the board (>=1 forces a real gap between items,
+// not just "centers don't fully coincide") so nothing visually crowds.
+const GROVE_TREE_DENSITY = 9;
+const GROVE_FOLIAGE_DENSITY = 13;
+const GROVE_FLOWER_CLUSTER_DENSITY = 0.05; // clusters/million px², a few items each
+const GROVE_MUSHROOM_CLUSTER_DENSITY = 0.09;
+const GROVE_MUSHROOM_TOPUP_DENSITY = 1.4;
+const GROVE_ROCK_CLUSTER_DENSITY = 0.1;
+const GROVE_ROCK_TOPUP_DENSITY = 1.5;
+const GROVE_AMBIENT_DENSITY = 0.7;
+
 function generateWorld() {
   spatialIndex = WorldGen.createSpatialIndex(160);
+  renderGrid = WorldGen.createBucketGrid(RENDER_GRID_CELL_SIZE);
   terrainNoise = WorldGen.createValueNoise2D();
 
   // Generated before everything else so trees/foliage/mushrooms/rocks can
@@ -1949,17 +2259,20 @@ function generateWorld() {
   window.campfire = campfire;
 
   // --- Trees ---
-  // Woodland Grove fills the inner disk only (radius up to
-  // BIOME_INNER_RADIUS) — beyond that, each of the five outlying biomes
-  // (see "--- Biomes ---" above) owns its own wedge, including its own
-  // denser tree band out at the world's true edge. See generateBiomes().
+  // Woodland Grove fills the inner disk (radius up to roughly
+  // BIOME_INNER_RADIUS, thinning out across GROVE_BLEND_WIDTH on either side
+  // of it rather than stopping dead) — beyond that, each of the five
+  // outlying biomes (see "--- Biomes ---" above) owns its own wedge,
+  // similarly blended at both its inner and outer edges. See generateBiomes().
+  const groveOuterRadius = BIOME_INNER_RADIUS + GROVE_BLEND_WIDTH;
+  const groveTreeArea = annulusArea(CLEARING_RADIUS, groveOuterRadius);
   trees = scatterWithDensity({
-    count: 550,
-    maxAttempts: 550 * 12,
-    sample: () => sampleAnnulus(CLEARING_RADIUS, BIOME_INNER_RADIUS),
+    count: densityCount(GROVE_TREE_DENSITY, groveTreeArea),
+    maxAttempts: densityCount(GROVE_TREE_DENSITY, groveTreeArea) * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS, groveOuterRadius),
     densityAt: treeRingDensity,
     footprintRadius: treeFootprintRadius,
-    overlapAllowance: 0.8,
+    overlapAllowance: 1.05,
     build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.75 + RNG.random() * 0.55 }),
   });
 
@@ -1972,28 +2285,31 @@ function generateWorld() {
     maxAttempts: 14 * 15,
     sample: () => sampleAnnulus(40, CLEARING_RADIUS - 20),
     footprintRadius: foliageFootprintRadius,
-    overlapAllowance: 0.5,
+    overlapAllowance: 0.7,
     build: (x, y) => ({ x, y, type: pickClearingFoliageType(), scale: 0.7 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
   }));
 
   // Interior forest floor: noise-gated patchiness (lush meadows, barren gaps).
+  const groveFoliageArea = annulusArea(CLEARING_RADIUS + 40, groveOuterRadius);
   foliage.push(...scatterWithDensity({
-    count: 420,
-    maxAttempts: 420 * 10,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 40, BIOME_INNER_RADIUS),
+    count: densityCount(GROVE_FOLIAGE_DENSITY, groveFoliageArea),
+    maxAttempts: densityCount(GROVE_FOLIAGE_DENSITY, groveFoliageArea) * 10,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 40, groveOuterRadius),
     densityAt: (x, y) => {
       const density = terrainNoise(x / 260, y / 260);
-      if (density < 0.42) return 0;
-      return Math.min(1, (density - 0.42) / 0.58 + 0.2);
+      const base = density < 0.42 ? 0 : Math.min(1, (density - 0.42) / 0.58 + 0.2);
+      return base * groveOuterFade(distFromCenter(x, y));
     },
     footprintRadius: foliageFootprintRadius,
-    overlapAllowance: 0.55,
+    overlapAllowance: 0.85,
     build: (x, y) => ({ x, y, type: pickFoliageType(), scale: 0.8 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
   }));
 
   // A handful of tight flower clusters layered on top.
-  for (let c = 0; c < 8; c++) {
-    const center = sampleAnnulus(CLEARING_RADIUS + 40, BIOME_INNER_RADIUS);
+  const flowerClusterCount = densityCount(GROVE_FLOWER_CLUSTER_DENSITY, groveFoliageArea);
+  for (let c = 0; c < flowerClusterCount; c++) {
+    const center = sampleAnnulus(CLEARING_RADIUS + 40, groveOuterRadius);
+    if (RNG.random() > groveOuterFade(distFromCenter(center.x, center.y))) continue;
     const n = 3 + Math.floor(RNG.random() * 4);
     for (let i = 0; i < n; i++) {
       const angle = RNG.random() * Math.PI * 2;
@@ -2003,16 +2319,19 @@ function generateWorld() {
       if (isPointInWater(x, y)) continue;
       const item = { x, y, type: "flowers", scale: 0.8 + RNG.random() * 0.3, flip: RNG.random() < 0.5 };
       const radius = foliageFootprintRadius(item);
-      if (spatialIndex.hasOverlap(x, y, radius, 0.5)) continue;
+      if (spatialIndex.hasOverlap(x, y, radius, 0.6)) continue;
       spatialIndex.insert(x, y, radius);
       foliage.push(item);
     }
   }
 
   // --- Mushrooms ---
+  const groveDetailArea = annulusArea(CLEARING_RADIUS + 60, groveOuterRadius);
   mushrooms = [];
-  for (let c = 0; c < 16; c++) {
-    const center = sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS);
+  const mushroomClusterCount = densityCount(GROVE_MUSHROOM_CLUSTER_DENSITY, groveDetailArea);
+  for (let c = 0; c < mushroomClusterCount; c++) {
+    const center = sampleAnnulus(CLEARING_RADIUS + 60, groveOuterRadius);
+    if (RNG.random() > groveOuterFade(distFromCenter(center.x, center.y))) continue;
     const n = 2 + Math.floor(RNG.random() * 3);
     for (let i = 0; i < n; i++) {
       const angle = RNG.random() * Math.PI * 2;
@@ -2022,24 +2341,27 @@ function generateWorld() {
       if (distFromCenter(x, y) < CLEARING_RADIUS || isPointInWater(x, y)) continue;
       const item = { x, y, type: pickMushroomType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 };
       const radius = mushroomFootprintRadius(item);
-      if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
+      if (spatialIndex.hasOverlap(x, y, radius, 0.7)) continue;
       spatialIndex.insert(x, y, radius);
       mushrooms.push(item);
     }
   }
   mushrooms.push(...scatterWithDensity({
-    count: 24,
-    maxAttempts: 24 * 15,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS),
+    count: densityCount(GROVE_MUSHROOM_TOPUP_DENSITY, groveDetailArea),
+    maxAttempts: densityCount(GROVE_MUSHROOM_TOPUP_DENSITY, groveDetailArea) * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, groveOuterRadius),
+    densityAt: (x, y) => groveOuterFade(distFromCenter(x, y)),
     footprintRadius: mushroomFootprintRadius,
-    overlapAllowance: 0.55,
+    overlapAllowance: 0.7,
     build: (x, y) => ({ x, y, type: pickMushroomType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
   }));
 
   // --- Rocks ---
   rocks = [];
-  for (let c = 0; c < 18; c++) {
-    const center = sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS);
+  const rockClusterCount = densityCount(GROVE_ROCK_CLUSTER_DENSITY, groveDetailArea);
+  for (let c = 0; c < rockClusterCount; c++) {
+    const center = sampleAnnulus(CLEARING_RADIUS + 60, groveOuterRadius);
+    if (RNG.random() > groveOuterFade(distFromCenter(center.x, center.y))) continue;
     const n = 2 + Math.floor(RNG.random() * 4);
     for (let i = 0; i < n; i++) {
       const angle = RNG.random() * Math.PI * 2;
@@ -2049,29 +2371,37 @@ function generateWorld() {
       if (distFromCenter(x, y) < CLEARING_RADIUS || isPointInWater(x, y)) continue;
       const item = { x, y, variant: pickRockVariant(), scale: 0.75 + RNG.random() * 0.35, flip: RNG.random() < 0.5 };
       const radius = rockFootprintRadius(item);
-      if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
+      if (spatialIndex.hasOverlap(x, y, radius, 0.7)) continue;
       spatialIndex.insert(x, y, radius);
       rocks.push(item);
     }
   }
   rocks.push(...scatterWithDensity({
-    count: 26,
-    maxAttempts: 26 * 15,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS),
+    count: densityCount(GROVE_ROCK_TOPUP_DENSITY, groveDetailArea),
+    maxAttempts: densityCount(GROVE_ROCK_TOPUP_DENSITY, groveDetailArea) * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, groveOuterRadius),
+    densityAt: (x, y) => groveOuterFade(distFromCenter(x, y)),
     footprintRadius: rockFootprintRadius,
-    overlapAllowance: 0.55,
+    overlapAllowance: 0.7,
     build: (x, y) => ({ x, y, variant: pickRockVariant(), scale: 0.75 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
   }));
 
   // --- Ambient details ---
   ambientDetails = scatterWithDensity({
-    count: 60,
-    maxAttempts: 60 * 15,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS),
+    count: densityCount(GROVE_AMBIENT_DENSITY, groveDetailArea),
+    maxAttempts: densityCount(GROVE_AMBIENT_DENSITY, groveDetailArea) * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, groveOuterRadius),
+    densityAt: (x, y) => groveOuterFade(distFromCenter(x, y)),
     footprintRadius: ambientFootprintRadius,
-    overlapAllowance: 0.55,
+    overlapAllowance: 0.7,
     build: (x, y) => ({ x, y, type: pickAmbientType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
   });
+
+  insertIntoRenderGrid("tree", trees);
+  insertIntoRenderGrid("foliage", foliage);
+  insertIntoRenderGrid("mushroom", mushrooms);
+  insertIntoRenderGrid("rock", rocks);
+  insertIntoRenderGrid("ambient", ambientDetails);
 
   // --- Biomes (five outlying wedges beyond the Grove) ---
   generateBiomes();
@@ -2086,6 +2416,7 @@ function generateWorld() {
   iceBridges = [];
   projectiles = [];
   effects = [];
+  pendingEarthShatters = [];
 
   // --- Player ---
   player = new Player(campfire.x, campfire.y + 110);
@@ -2110,6 +2441,33 @@ function updateCamera() {
 function drawGround() {
   ctx.fillStyle = "#2e5c2e";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// World-edge mist: a radial fade from fully clear to fully opaque, centered
+// on the world so the impassable boundary (see PLAYER_MAX_RADIUS and
+// clampToWorld()) reads as encroaching fog rather than an invisible wall.
+// MIST_INNER_RADIUS sits well short of PLAYER_MAX_RADIUS so mist is already
+// visible as the player approaches; MIST_OUTER_RADIUS (where it goes fully
+// opaque) sits past PLAYER_MAX_RADIUS, in ground the player can never
+// actually reach, so from where they stand it always reads as a soft,
+// gradual whiteout rather than a hard line.
+const MIST_INNER_RADIUS = PLAYER_MAX_RADIUS - 1400;
+const MIST_OUTER_RADIUS = PLAYER_MAX_RADIUS + 2200;
+const MIST_COLOR_RGB = "222, 232, 236";
+
+function drawWorldMist(camera) {
+  const playerDist = distFromCenter(player.x, player.y);
+  const viewSpan = Math.max(canvas.width, canvas.height) / camera.zoom;
+  // Perf guard: skip entirely unless the mist band could plausibly be in view.
+  if (playerDist + viewSpan < MIST_INNER_RADIUS) return;
+
+  const cx = WORLD_CENTER.x - camera.x;
+  const cy = WORLD_CENTER.y - camera.y;
+  const gradient = ctx.createRadialGradient(cx, cy, MIST_INNER_RADIUS, cx, cy, MIST_OUTER_RADIUS);
+  gradient.addColorStop(0, `rgba(${MIST_COLOR_RGB}, 0)`);
+  gradient.addColorStop(1, `rgba(${MIST_COLOR_RGB}, 1)`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(cx - MIST_OUTER_RADIUS, cy - MIST_OUTER_RADIUS, MIST_OUTER_RADIUS * 2, MIST_OUTER_RADIUS * 2);
 }
 
 function drawTree(tree, camera) {
@@ -2174,6 +2532,7 @@ function drawMushroom(item, camera) {
 }
 
 function drawRock(item, camera) {
+  if (item.destroyed) return; // shattered by Earth Breaker — see castEarthBreaker()
   drawGroundSprite(item.variant, item, camera);
 }
 
@@ -2252,11 +2611,14 @@ function loop(now) {
   if (fJustPressed) {
     if (menuOpenBefore) {
       lobbyEl.classList.add("lobby-hidden");
+      Sound.menuClose();
     } else if (inCampfireRange) {
       lobbyEl.classList.remove("lobby-hidden");
+      Sound.menuOpen();
     }
   } else if (menuOpenBefore && keys.escape) {
     lobbyEl.classList.add("lobby-hidden");
+    Sound.menuClose();
   }
 
   const menuOpen = !lobbyEl.classList.contains("lobby-hidden");
@@ -2294,6 +2656,7 @@ function loop(now) {
     updateProjectiles(dt);
     updateEffects(dt);
     updateHealingPools(now);
+    updatePendingEarthShatters(now);
     pruneExpired(obstacles, now);
     pruneExpired(iceBridges, now);
   }
@@ -2336,15 +2699,20 @@ function loop(now) {
 
   // Depth-sort every ground object, remote players, and the local player by
   // world y so nearer/taller things convincingly occlude farther ones.
+  //
+  // Static scatter content (trees/foliage/mushrooms/rocks/ambient/biome
+  // content) is pulled from renderGrid rather than iterated in full — the
+  // world can hold tens of thousands of such items, but only the handful
+  // actually near the camera matter for any given frame. RENDER_VIEW_MARGIN
+  // is generous enough that even the widest ground sprite, anchored just
+  // outside the strict viewport, still gets included before it'd visibly pop in.
   const drawables = [];
   drawables.push({ y: campfire.y, kind: "campfire", item: campfire });
-  for (const tree of trees) drawables.push({ y: tree.y, kind: "tree", item: tree });
-  for (const item of foliage) drawables.push({ y: item.y, kind: "foliage", item });
-  for (const item of mushrooms) drawables.push({ y: item.y, kind: "mushroom", item });
-  for (const item of rocks) drawables.push({ y: item.y, kind: "rock", item });
-  for (const item of ambientDetails) drawables.push({ y: item.y, kind: "ambient", item });
-  for (const item of biomeTrees) drawables.push({ y: item.y, kind: "biomeTree", item });
-  for (const item of biomeFoliage) drawables.push({ y: item.y, kind: "biomeFoliage", item });
+  const viewHalfW = canvas.width / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
+  const viewHalfH = canvas.height / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
+  const viewCenterX = camera.x + canvas.width / 2;
+  const viewCenterY = camera.y + canvas.height / 2;
+  renderGrid.queryRect(viewCenterX - viewHalfW, viewCenterY - viewHalfH, viewCenterX + viewHalfW, viewCenterY + viewHalfH, drawables);
   for (const enemy of enemies) drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
   for (const p of projectiles) drawables.push({ y: p.y, kind: "projectile", item: p });
   if (mp) {
@@ -2375,6 +2743,7 @@ function loop(now) {
 
   drawObstacles(camera);
   for (const effect of effects) drawEffect(effect, camera);
+  drawWorldMist(camera);
 
   ctx.restore();
 

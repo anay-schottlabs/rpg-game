@@ -126,5 +126,49 @@ const WorldGen = (() => {
     return { insert, hasOverlap };
   }
 
-  return { createValueNoise2D, scatterPatchy, scatterClusters, createSpatialIndex };
+  // Uniform grid for fast "what's near this rectangle" queries at render
+  // time — a different job from createSpatialIndex above (which rejects
+  // overlapping placements during generation). In a world with tens of
+  // thousands of scattered items, the render loop can't afford to iterate
+  // all of them every frame; it only wants the ones actually near the
+  // camera. `insert` takes an arbitrary entry (the render loop stores its
+  // own {y, kind, item} shape); `queryRect` appends every entry whose cell
+  // overlaps the given world-space rectangle onto `out`.
+  function createBucketGrid(cellSize) {
+    const cells = new Map();
+
+    function key(cx, cy) {
+      return `${cx},${cy}`;
+    }
+
+    function insert(x, y, entry) {
+      const cx = Math.floor(x / cellSize);
+      const cy = Math.floor(y / cellSize);
+      const k = key(cx, cy);
+      let bucket = cells.get(k);
+      if (!bucket) {
+        bucket = [];
+        cells.set(k, bucket);
+      }
+      bucket.push(entry);
+    }
+
+    function queryRect(x0, y0, x1, y1, out) {
+      const cx0 = Math.floor(x0 / cellSize);
+      const cx1 = Math.floor(x1 / cellSize);
+      const cy0 = Math.floor(y0 / cellSize);
+      const cy1 = Math.floor(y1 / cellSize);
+      for (let cx = cx0; cx <= cx1; cx++) {
+        for (let cy = cy0; cy <= cy1; cy++) {
+          const bucket = cells.get(key(cx, cy));
+          if (!bucket) continue;
+          for (const entry of bucket) out.push(entry);
+        }
+      }
+    }
+
+    return { insert, queryRect };
+  }
+
+  return { createValueNoise2D, scatterPatchy, scatterClusters, createSpatialIndex, createBucketGrid };
 })();

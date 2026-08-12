@@ -392,6 +392,22 @@ const ForestAssets = (() => {
         <path d="M78,28 Q90,38 84,46 Q94,44 92,54 Q88,62 80,60 Q68,56 68,46 Q68,38 78,28 Z" fill="#c9622f" stroke="#f0e6d2" stroke-width="2.5"/>
       </svg>`,
 
+    // From the design doc's "Impact Effects" section — the earth counterpart
+    // to fireImpact just below, reused by Earth Breaker for every rock it
+    // shatters (js/game.js castEarthBreaker()).
+    earthImpact: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="110" height="110" viewBox="0 0 110 110">
+        <defs>
+          <radialGradient id="impactEarthGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#a68b5c" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="#a68b5c" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="55" cy="55" r="42" fill="url(#impactEarthGlow)"/>
+        <polygon points="55,14 62,40 88,34 66,52 78,76 55,62 32,76 44,52 22,34 48,40" fill="#6b5a44" stroke="#e8dcc0" stroke-width="2.5"/>
+        <circle cx="55" cy="55" r="10" fill="#8a7458" stroke="#e8dcc0" stroke-width="2"/>
+      </svg>`,
+
     fireImpact: `
       <svg xmlns="http://www.w3.org/2000/svg" width="110" height="110" viewBox="0 0 110 110">
         <defs>
@@ -463,6 +479,7 @@ const ForestAssets = (() => {
   const spellMeta = {
     fireBolt: { width: 66, height: 38, groundFraction: 0.5 }, // anchored at its own center — it's airborne, not ground-planted
     fireImpact: { width: 80, height: 80, groundFraction: 0.5 },
+    earthImpact: { width: 90, height: 90, groundFraction: 0.5 },
     earthWallPillar: { width: 95, height: 127, groundFraction: 150 / 160 },
     earthWallBarricade: { width: 190, height: 95, groundFraction: 92 / 110 },
     iceBridgeSegment: { width: 150, height: 68, groundFraction: 76 / 100 },
