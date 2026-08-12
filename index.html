@@ -20,6 +20,88 @@
       <path d="M18,15 C14,10 8,14 10,19 C12,23 18,27 18,27 C18,27 24,23 26,19 C28,14 22,10 18,15 Z" fill="#e8b0b0" stroke="#2a1f18" stroke-width="1"/>
     </svg>
 
+    <!-- Casting ring — shown while E is held. Arrow presses build a combo;
+         each pip lights up (colored by the closest-matching spell's
+         element) once its direction has been entered. -->
+    <svg id="casting-ring" width="280" height="280" viewBox="0 0 280 280">
+      <defs>
+        <radialGradient id="castGlowNeutral" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#f4c94a" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#f4c94a" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="castGlowFire" cx="0.5" cy="0.55" r="0.5">
+          <stop offset="0" stop-color="#e8a24a" stop-opacity="0.6"/>
+          <stop offset="1" stop-color="#e8a24a" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="castGlowEarth" cx="0.5" cy="0.55" r="0.5">
+          <stop offset="0" stop-color="#a68b5c" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#a68b5c" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="castGlowWind" cx="0.5" cy="0.55" r="0.5">
+          <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
+          <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="castGlowWater" cx="0.5" cy="0.55" r="0.5">
+          <stop offset="0" stop-color="#5fa0b0" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#5fa0b0" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <circle id="casting-glow" cx="140" cy="140" r="90" fill="url(#castGlowNeutral)"/>
+      <circle cx="140" cy="140" r="46" fill="none" stroke="#2a1f18" stroke-width="3" stroke-dasharray="6 6" opacity="0.7"/>
+
+      <g id="cast-pip-up">
+        <circle cx="140" cy="42" r="18" fill="#8a7a68" stroke="#2a1f18" stroke-width="2.5"/>
+        <text x="140" y="49" text-anchor="middle" font-size="17" fill="#f0e6d2">↑</text>
+      </g>
+      <g id="cast-pip-right">
+        <circle cx="238" cy="140" r="18" fill="#8a7a68" stroke="#2a1f18" stroke-width="2.5"/>
+        <text x="238" y="147" text-anchor="middle" font-size="17" fill="#f0e6d2">→</text>
+      </g>
+      <g id="cast-pip-down">
+        <circle cx="140" cy="238" r="18" fill="#8a7a68" stroke="#2a1f18" stroke-width="2.5"/>
+        <text x="140" y="245" text-anchor="middle" font-size="17" fill="#f0e6d2">↓</text>
+      </g>
+      <g id="cast-pip-left">
+        <circle cx="42" cy="140" r="18" fill="#8a7a68" stroke="#2a1f18" stroke-width="2.5"/>
+        <text x="42" y="147" text-anchor="middle" font-size="17" fill="#f0e6d2">←</text>
+      </g>
+    </svg>
+
+    <!-- Sigil flash — one element flashes briefly when a spell combo is
+         entered correctly (checked on releasing E). -->
+    <div id="sigil-flash">
+      <svg id="sigil-earth" class="sigil-icon hidden" width="140" height="140" viewBox="0 0 120 120">
+        <defs><radialGradient id="sigilEarthGlow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#a68b5c" stop-opacity="0.6"/><stop offset="1" stop-color="#a68b5c" stop-opacity="0"/></radialGradient></defs>
+        <circle cx="60" cy="60" r="46" fill="url(#sigilEarthGlow)"/>
+        <polygon points="60,20 92,40 92,80 60,100 28,80 28,40" fill="#6b5a44" opacity="0.3" stroke="#e8dcc0" stroke-width="3"/>
+        <polygon points="60,38 78,50 78,72 60,84 42,72 42,50" fill="none" stroke="#e8dcc0" stroke-width="2.5"/>
+        <line x1="60" y1="38" x2="60" y2="20" stroke="#e8dcc0" stroke-width="2.5"/>
+        <line x1="78" y1="50" x2="92" y2="40" stroke="#e8dcc0" stroke-width="2.5"/>
+        <line x1="42" y1="72" x2="28" y2="80" stroke="#e8dcc0" stroke-width="2.5"/>
+      </svg>
+      <svg id="sigil-wind" class="sigil-icon hidden" width="140" height="140" viewBox="0 0 120 120">
+        <defs><radialGradient id="sigilWindGlow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#bfe3e3" stop-opacity="0.55"/><stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/></radialGradient></defs>
+        <circle cx="60" cy="60" r="46" fill="url(#sigilWindGlow)"/>
+        <path d="M60,60 Q20,60 20,32 Q20,10 44,14 Q60,17 58,34" fill="none" stroke="#d8f0f0" stroke-width="4" stroke-linecap="round"/>
+        <path d="M60,60 Q100,60 100,88 Q100,110 76,106 Q60,103 62,86" fill="none" stroke="#d8f0f0" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="60" cy="60" r="4" fill="#d8f0f0"/>
+      </svg>
+      <svg id="sigil-fire" class="sigil-icon hidden" width="140" height="140" viewBox="0 0 120 120">
+        <defs><radialGradient id="sigilFireGlow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#e8a24a" stop-opacity="0.65"/><stop offset="1" stop-color="#e8a24a" stop-opacity="0"/></radialGradient></defs>
+        <circle cx="60" cy="60" r="46" fill="url(#sigilFireGlow)"/>
+        <path d="M60,22 Q72,44 62,58 Q76,52 70,72 Q66,92 56,96 Q38,90 36,72 Q34,54 46,42 Q42,32 60,22 Z" fill="#c9622f" stroke="#f0e6d2" stroke-width="3"/>
+        <path d="M58,42 Q64,54 58,64 Q66,60 63,72 Q60,84 54,86 Q44,82 43,70 Q42,58 50,50 Q47,44 58,42 Z" fill="#e8b13f" opacity="0.85"/>
+      </svg>
+      <svg id="sigil-water" class="sigil-icon hidden" width="140" height="140" viewBox="0 0 120 120">
+        <defs><radialGradient id="sigilWaterGlow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#5fa0b0" stop-opacity="0.6"/><stop offset="1" stop-color="#5fa0b0" stop-opacity="0"/></radialGradient></defs>
+        <circle cx="60" cy="60" r="46" fill="url(#sigilWaterGlow)"/>
+        <path d="M26,46 Q43,34 60,46 Q77,58 94,46" fill="none" stroke="#bfe3e3" stroke-width="4" stroke-linecap="round"/>
+        <path d="M26,62 Q43,50 60,62 Q77,74 94,62" fill="none" stroke="#bfe3e3" stroke-width="4" stroke-linecap="round"/>
+        <path d="M60,74 C68,84 74,90 74,96 C74,103 67,107 60,107 C53,107 46,103 46,96 C46,90 52,84 60,74 Z" fill="#4a7a7a" stroke="#e8f4f4" stroke-width="2.5"/>
+      </svg>
+    </div>
+
     <!-- Hidden by default: the game plays solo immediately on load. This
          only opens when the player interacts (F) near the campfire — see
          the campfire-menu logic in js/game.js and js/lobby.js. -->

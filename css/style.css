@@ -30,6 +30,63 @@ html, body {
   display: none !important;
 }
 
+/* Casting ring — appears around the player (who's always screen-centered)
+   while E is held. */
+#casting-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 12;
+}
+
+#casting-ring.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+#cast-pip-up circle, #cast-pip-right circle, #cast-pip-down circle, #cast-pip-left circle {
+  transition: fill 0.1s ease;
+}
+
+#cast-pip-up, #cast-pip-right, #cast-pip-down, #cast-pip-left {
+  transition: opacity 0.1s ease;
+}
+
+/* Sigil flash — the matching element flashes briefly on a successful cast. */
+#sigil-flash {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  width: 140px;
+  height: 140px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 13;
+}
+
+.sigil-icon {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+}
+
+.sigil-icon.flash-anim {
+  animation: sigil-flash-anim 1.1s ease-out forwards;
+}
+
+@keyframes sigil-flash-anim {
+  0% { opacity: 0; transform: scale(0.6); }
+  20% { opacity: 1; transform: scale(1.15); }
+  35% { opacity: 1; transform: scale(1); }
+  75% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.05); }
+}
+
 /* Campfire menu — hidden until the player interacts (F) near the campfire;
    the game itself plays solo immediately on load. Styled to match the
    spellbook's wood/parchment look below. */
