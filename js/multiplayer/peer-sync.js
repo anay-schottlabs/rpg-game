@@ -59,7 +59,7 @@ function update(dt) {
   const input = {
     dx: (k.d ? 1 : 0) - (k.a ? 1 : 0),
     dy: (k.s ? 1 : 0) - (k.w ? 1 : 0),
-    e: k.e,
+    e: k.shift,
   };
 
   heartbeatAccumulatorMs += dt * 1000;

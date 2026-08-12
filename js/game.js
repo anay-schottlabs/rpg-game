@@ -31,7 +31,7 @@ const keys = {
   a: false,
   s: false,
   d: false,
-  e: false,
+  shift: false,
   q: false,
   f: false,
   tab: false,
@@ -48,11 +48,11 @@ window.addEventListener("keydown", (e) => {
     // buttons); once the game has started, we want it exclusively as the
     // player-list toggle instead.
     if (key === "tab" && lobbyEl.classList.contains("lobby-hidden")) e.preventDefault();
-    if (key === "e" && justPressed) startCasting();
+    if (key === "shift" && justPressed) startCasting();
     return;
   }
 
-  if (keys.e) {
+  if (keys.shift) {
     const dir = ARROW_KEY_TO_DIR[key];
     if (dir) {
       e.preventDefault();
@@ -73,18 +73,19 @@ window.addEventListener("keyup", (e) => {
   const key = e.key.toLowerCase();
   if (key in keys) {
     keys[key] = false;
-    if (key === "e") stopCasting();
+    if (key === "shift") stopCasting();
   }
 });
 
 // If the window loses focus while a key is held (alt-tab, clicking outside
 // the page, a DevTools panel stealing focus, etc.), the browser never sends
-// its keyup — without this, `keys.e` stays stuck true forever, which stops
-// startCasting() from ever firing again on the next real press and leaves
-// castSequence full of stale directions. Treat losing focus as releasing
-// everything, silently (no sigil flash — this isn't a real cast attempt).
+// its keyup — without this, `keys.shift` stays stuck true forever, which
+// stops startCasting() from ever firing again on the next real press and
+// leaves castSequence full of stale directions. Treat losing focus as
+// releasing everything, silently (no sigil flash — this isn't a real cast
+// attempt).
 window.addEventListener("blur", () => {
-  const wasCasting = keys.e;
+  const wasCasting = keys.shift;
   for (const key of Object.keys(keys)) keys[key] = false;
   if (wasCasting) {
     castingRingEl.classList.remove("visible");
@@ -1001,7 +1002,7 @@ class Player {
     const input = {
       dx: (keys.d ? 1 : 0) - (keys.a ? 1 : 0),
       dy: (keys.s ? 1 : 0) - (keys.w ? 1 : 0),
-      e: keys.e,
+      e: keys.shift,
     };
     const prevX = this.x;
     const prevY = this.y;
@@ -2667,7 +2668,7 @@ function loop(now) {
   // Zoom is purely local UI feedback — it reads the raw key state directly
   // rather than the (possibly host-delayed) simulated `isCasting`, so it
   // stays instant regardless of network mode.
-  const targetZoom = keys.e ? CAST_ZOOM : 1;
+  const targetZoom = keys.shift ? CAST_ZOOM : 1;
   camera.zoom += (targetZoom - camera.zoom) * Math.min(1, dt * ZOOM_APPROACH_RATE);
 
   // Spellbook: Q toggles it open/closed (press again to close), at any time,
