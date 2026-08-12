@@ -22,3 +22,8 @@ const RNG = (() => {
     },
   };
 })();
+// `const` at a classic script's top level doesn't become a `window`
+// property (unlike `var`/function declarations), but js/multiplayer/*.js
+// are ES modules and can only reach across into a classic script via
+// `window` — same reason game.js explicitly bridges startGame/campfire/etc.
+window.RNG = RNG;
