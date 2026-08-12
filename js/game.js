@@ -18,6 +18,7 @@ const keys = {
   s: false,
   d: false,
   shift: false,
+  e: false,
 };
 
 window.addEventListener("keydown", (e) => {
@@ -327,6 +328,7 @@ const ambientDetails = scatterWithDensity({
 const DASH_SPEED_MULTIPLIER = 2.6;
 const DASH_DURATION = 0.18; // seconds the burst itself lasts
 const DASH_COOLDOWN = 0.6; // seconds before another dash can start
+const CAST_SPEED_MULTIPLIER = 0.12; // drastic slowdown while channeling a spell
 
 class Player {
   constructor(x, y) {
@@ -339,6 +341,7 @@ class Player {
     this.color = "#e0b64a";
     this.dashTimeLeft = 0;
     this.dashCooldownLeft = 0;
+    this.isCasting = false;
   }
 
   update(dt) {
@@ -351,6 +354,7 @@ class Player {
     if (keys.d) dx += 1;
 
     const hasInput = dx !== 0 || dy !== 0;
+    this.isCasting = keys.e;
 
     if (this.dashCooldownLeft > 0) this.dashCooldownLeft -= dt;
     if (this.dashTimeLeft > 0) this.dashTimeLeft -= dt;
@@ -366,12 +370,15 @@ class Player {
 
       // Holding shift while moving triggers a quick speed burst, capped by
       // a cooldown so it can't just be held down for a permanent sprint.
-      if (keys.shift && this.dashCooldownLeft <= 0) {
+      // Casting locks that out — you plant your feet to channel a spell.
+      if (!this.isCasting && keys.shift && this.dashCooldownLeft <= 0) {
         this.dashTimeLeft = DASH_DURATION;
         this.dashCooldownLeft = DASH_COOLDOWN;
       }
 
-      const speed = this.dashTimeLeft > 0 ? this.speed * DASH_SPEED_MULTIPLIER : this.speed;
+      let speed = this.dashTimeLeft > 0 ? this.speed * DASH_SPEED_MULTIPLIER : this.speed;
+      if (this.isCasting) speed = this.speed * CAST_SPEED_MULTIPLIER;
+
       this.x += dx * speed * dt;
       this.y += dy * speed * dt;
     }
@@ -436,7 +443,9 @@ const player = new Player(campfire.x, campfire.y + 110);
 
 // --- Camera ------------------------------------------------------------------
 
-const camera = { x: 0, y: 0 };
+const camera = { x: 0, y: 0, zoom: 1 };
+const CAST_ZOOM = 1.6;
+const ZOOM_APPROACH_RATE = 6; // higher = snappier transition into/out of the zoom
 
 function updateCamera() {
   camera.x = player.x - canvas.width / 2;
@@ -534,6 +543,18 @@ function loop(now) {
   player.update(dt);
   updateCamera();
 
+  // Ease toward the cast zoom rather than snapping, so entering/leaving
+  // spellcasting reads as a deliberate push-in rather than a jump cut.
+  const targetZoom = player.isCasting ? CAST_ZOOM : 1;
+  camera.zoom += (targetZoom - camera.zoom) * Math.min(1, dt * ZOOM_APPROACH_RATE);
+
+  // The player is always drawn at canvas center, so scaling around that
+  // same point zooms in on them for free — no per-object math needed.
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.scale(camera.zoom, camera.zoom);
+  ctx.translate(-canvas.width / 2, -canvas.height / 2);
+
   drawGround();
 
   // Depth-sort every ground object and the player by world y so the player
@@ -561,6 +582,8 @@ function loop(now) {
       case "player": player.draw(ctx, camera); break;
     }
   }
+
+  ctx.restore();
 
   requestAnimationFrame(loop);
 }
