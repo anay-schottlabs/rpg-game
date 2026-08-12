@@ -128,100 +128,161 @@
     </div>
 
     <div id="spellbook">
-      <div class="spellbook-page spellbook-page-left">
-        <h2 class="spellbook-title">Spellbook</h2>
-        <svg class="spellbook-flourish" width="100" height="10" viewBox="0 0 100 10">
-          <path d="M5,5 Q25,0 50,5 Q75,10 95,5" stroke="#2a1f18" stroke-width="1.5" fill="none"/>
-        </svg>
+      <div class="spellbook-tabs">
+        <button type="button" class="spellbook-tab-btn active" data-tab="1">1</button>
+        <button type="button" class="spellbook-tab-btn" data-tab="2">2</button>
+        <button type="button" class="spellbook-tab-btn" data-tab="3">3</button>
+        <button type="button" class="spellbook-tab-btn" data-tab="4">4</button>
+      </div>
 
-        <div class="spell-entry">
-          <div class="spell-header">
-            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><polygon points="16,4 28,11 28,25 16,32 4,25 4,11" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/></svg>
-            <div>
-              <div class="spell-name">Stoneskin</div>
-              <div class="spell-school">Earth</div>
+      <!-- Tab 1: Earth -->
+      <div class="spellbook-tab-panel active" data-tab-panel="1">
+        <div class="spellbook-page spellbook-page-left">
+          <h2 class="spellbook-title">Earth</h2>
+          <svg class="spellbook-flourish" width="100" height="10" viewBox="0 0 100 10">
+            <path d="M5,5 Q25,0 50,5 Q75,10 95,5" stroke="#2a1f18" stroke-width="1.5" fill="none"/>
+          </svg>
+
+          <div class="spell-entry">
+            <div class="spell-header">
+              <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><polygon points="16,4 28,11 28,25 16,32 4,25 4,11" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/></svg>
+              <div>
+                <div class="spell-name">Stoneskin</div>
+                <div class="spell-school">Earth — ring of pillars around you</div>
+              </div>
             </div>
-          </div>
-          <div class="spell-combo">
-            <span class="key-chip">↑</span>
-            <span class="key-chip">→</span>
-            <span class="key-chip">↓</span>
+            <div class="spell-combo">
+              <span class="key-chip">↑</span>
+              <span class="key-chip">→</span>
+              <span class="key-chip">↓</span>
+            </div>
           </div>
         </div>
 
-        <div class="spell-entry">
-          <div class="spell-header">
-            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M16,4 C22,14 26,20 26,24 C26,29 21,32 16,32 C11,32 6,29 6,24 C6,20 10,14 16,4 Z" fill="#4a7a7a" stroke="#2a1f18" stroke-width="2"/></svg>
-            <div>
-              <div class="spell-name">Tide Call</div>
-              <div class="spell-school">Water</div>
+        <div class="spellbook-spine">
+          <div class="spellbook-hinge spellbook-hinge-top"></div>
+          <div class="spellbook-hinge spellbook-hinge-bottom"></div>
+        </div>
+
+        <div class="spellbook-page spellbook-page-right">
+          <div class="spell-entry">
+            <div class="spell-header">
+              <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><polygon points="16,4 28,11 28,25 16,32 4,25 4,11" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/></svg>
+              <div>
+                <div class="spell-name">Rockfall</div>
+                <div class="spell-school">Earth — barricade ahead of you</div>
+              </div>
             </div>
-          </div>
-          <div class="spell-combo">
-            <span class="key-chip">←</span>
-            <span class="key-chip">↑</span>
-            <span class="key-chip">↑</span>
-            <span class="key-chip">→</span>
+            <div class="spell-combo">
+              <span class="key-chip">↓</span>
+              <span class="key-chip">↓</span>
+              <span class="key-chip">→</span>
+              <span class="key-chip">↑</span>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="spellbook-spine">
-        <div class="spellbook-hinge spellbook-hinge-top"></div>
-        <div class="spellbook-hinge spellbook-hinge-bottom"></div>
+      <!-- Tab 2: Water -->
+      <div class="spellbook-tab-panel" data-tab-panel="2">
+        <div class="spellbook-page spellbook-page-left">
+          <h2 class="spellbook-title">Water</h2>
+          <svg class="spellbook-flourish" width="100" height="10" viewBox="0 0 100 10">
+            <path d="M5,5 Q25,0 50,5 Q75,10 95,5" stroke="#2a1f18" stroke-width="1.5" fill="none"/>
+          </svg>
+
+          <div class="spell-entry">
+            <div class="spell-header">
+              <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M16,4 C22,14 26,20 26,24 C26,29 21,32 16,32 C11,32 6,29 6,24 C6,20 10,14 16,4 Z" fill="#4a7a7a" stroke="#2a1f18" stroke-width="2"/></svg>
+              <div>
+                <div class="spell-name">Tide Call</div>
+                <div class="spell-school">Water — heals near a healing pool, freezes a bridge near any other water</div>
+              </div>
+            </div>
+            <div class="spell-combo">
+              <span class="key-chip">←</span>
+              <span class="key-chip">↑</span>
+              <span class="key-chip">↑</span>
+              <span class="key-chip">→</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="spellbook-spine">
+          <div class="spellbook-hinge spellbook-hinge-top"></div>
+          <div class="spellbook-hinge spellbook-hinge-bottom"></div>
+        </div>
+
+        <div class="spellbook-page spellbook-page-right"></div>
       </div>
 
-      <div class="spellbook-page spellbook-page-right">
-        <div class="spell-entry">
-          <div class="spell-header">
-            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M16,4 Q22,14 18,20 Q24,18 22,26 Q20,32 16,32 Q10,30 9,24 Q8,18 13,14 Q12,10 16,4 Z" fill="#c9622f" stroke="#2a1f18" stroke-width="2"/></svg>
-            <div>
-              <div class="spell-name">Ember Burst</div>
-              <div class="spell-school">Fire</div>
+      <!-- Tab 3: Fire -->
+      <div class="spellbook-tab-panel" data-tab-panel="3">
+        <div class="spellbook-page spellbook-page-left">
+          <h2 class="spellbook-title">Fire</h2>
+          <svg class="spellbook-flourish" width="100" height="10" viewBox="0 0 100 10">
+            <path d="M5,5 Q25,0 50,5 Q75,10 95,5" stroke="#2a1f18" stroke-width="1.5" fill="none"/>
+          </svg>
+
+          <div class="spell-entry">
+            <div class="spell-header">
+              <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M16,4 Q22,14 18,20 Q24,18 22,26 Q20,32 16,32 Q10,30 9,24 Q8,18 13,14 Q12,10 16,4 Z" fill="#c9622f" stroke="#2a1f18" stroke-width="2"/></svg>
+              <div>
+                <div class="spell-name">Ember Burst</div>
+                <div class="spell-school">Fire — bolt toward where you're facing</div>
+              </div>
             </div>
-          </div>
-          <div class="spell-combo">
-            <span class="key-chip">→</span>
-            <span class="key-chip">↓</span>
-            <span class="key-chip">←</span>
-            <span class="key-chip">↑</span>
-            <span class="key-chip">→</span>
+            <div class="spell-combo">
+              <span class="key-chip">→</span>
+              <span class="key-chip">↓</span>
+              <span class="key-chip">←</span>
+              <span class="key-chip">↑</span>
+              <span class="key-chip">→</span>
+            </div>
           </div>
         </div>
 
-        <div class="spell-entry">
-          <div class="spell-header">
-            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M6,16 Q6,6 16,6 Q26,6 26,16 Q26,22 20,22 Q16,22 16,18" fill="none" stroke="#7fa8a8" stroke-width="3" stroke-linecap="round"/></svg>
-            <div>
-              <div class="spell-name">Gale Step</div>
-              <div class="spell-school">Wind</div>
+        <div class="spellbook-spine">
+          <div class="spellbook-hinge spellbook-hinge-top"></div>
+          <div class="spellbook-hinge spellbook-hinge-bottom"></div>
+        </div>
+
+        <div class="spellbook-page spellbook-page-right"></div>
+      </div>
+
+      <!-- Tab 4: Wind -->
+      <div class="spellbook-tab-panel" data-tab-panel="4">
+        <div class="spellbook-page spellbook-page-left">
+          <h2 class="spellbook-title">Wind</h2>
+          <svg class="spellbook-flourish" width="100" height="10" viewBox="0 0 100 10">
+            <path d="M5,5 Q25,0 50,5 Q75,10 95,5" stroke="#2a1f18" stroke-width="1.5" fill="none"/>
+          </svg>
+
+          <div class="spell-entry">
+            <div class="spell-header">
+              <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M6,16 Q6,6 16,6 Q26,6 26,16 Q26,22 20,22 Q16,22 16,18" fill="none" stroke="#7fa8a8" stroke-width="3" stroke-linecap="round"/></svg>
+              <div>
+                <div class="spell-name">Gale Step</div>
+                <div class="spell-school">Wind — knockback burst around you</div>
+              </div>
             </div>
-          </div>
-          <div class="spell-combo">
-            <span class="key-chip">↑</span>
-            <span class="key-chip">←</span>
-            <span class="key-chip">→</span>
-            <span class="key-chip">↓</span>
-            <span class="key-chip">↓</span>
-            <span class="key-chip">↑</span>
+            <div class="spell-combo">
+              <span class="key-chip">↑</span>
+              <span class="key-chip">←</span>
+              <span class="key-chip">→</span>
+              <span class="key-chip">↓</span>
+              <span class="key-chip">↓</span>
+              <span class="key-chip">↑</span>
+            </div>
           </div>
         </div>
 
-        <div class="spell-entry">
-          <div class="spell-header">
-            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><polygon points="16,4 28,11 28,25 16,32 4,25 4,11" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/></svg>
-            <div>
-              <div class="spell-name">Rockfall</div>
-              <div class="spell-school">Earth</div>
-            </div>
-          </div>
-          <div class="spell-combo">
-            <span class="key-chip">↓</span>
-            <span class="key-chip">↓</span>
-            <span class="key-chip">→</span>
-            <span class="key-chip">↑</span>
-          </div>
+        <div class="spellbook-spine">
+          <div class="spellbook-hinge spellbook-hinge-top"></div>
+          <div class="spellbook-hinge spellbook-hinge-bottom"></div>
         </div>
+
+        <div class="spellbook-page spellbook-page-right"></div>
       </div>
     </div>
   </div>

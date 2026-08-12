@@ -61,6 +61,13 @@ window.addEventListener("keydown", (e) => {
       updateCastingRing();
     }
   }
+
+  // Spellbook tabs: number keys switch pages while it's open (Q — see
+  // loop() below for how visibility is toggled).
+  if (spellbookEl.classList.contains("visible") && key in SPELLBOOK_TABS) {
+    e.preventDefault();
+    setSpellbookTab(key);
+  }
 });
 
 window.addEventListener("keyup", (e) => {
@@ -84,6 +91,10 @@ window.addEventListener("blur", () => {
     castingRingEl.classList.remove("visible");
     castSequence = [];
   }
+  // Q's open/close is edge-triggered (see qWasPressed in the game loop) —
+  // without resetting it here too, a Q held through a focus loss would
+  // silently eat the next press once focus returns.
+  qWasPressed = false;
 });
 
 // --- Spellcasting ------------------------------------------------------------
@@ -99,6 +110,22 @@ const SPELLS = [
 ];
 
 const ARROW_KEY_TO_DIR = { arrowup: "up", arrowdown: "down", arrowleft: "left", arrowright: "right" };
+
+// Spellbook pages, one per element, switched with the number keys while the
+// book is open (Q). Just a "1"/"2"/... -> tab-number lookup; the actual tab
+// markup/content lives in index.html.
+const SPELLBOOK_TABS = { 1: 1, 2: 2, 3: 3, 4: 4 };
+
+function setSpellbookTab(key) {
+  const tab = String(SPELLBOOK_TABS[key]);
+  for (const btn of document.querySelectorAll(".spellbook-tab-btn")) {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  }
+  for (const panel of document.querySelectorAll(".spellbook-tab-panel")) {
+    panel.classList.toggle("active", panel.dataset.tabPanel === tab);
+  }
+}
+
 const PIP_DIM_COLOR = "#8a7a68";
 const PIP_LIT_COLOR = "#f4c94a";
 
@@ -115,8 +142,35 @@ function stopCasting() {
   const cast = SPELLS.find(
     (s) => s.combo.length === castSequence.length && s.combo.every((dir, i) => dir === castSequence[i])
   );
-  if (cast) flashSigil(cast.element);
+  if (cast) {
+    flashSigil(cast.element);
+    triggerSpellEffect(cast.name);
+  }
   castSequence = [];
+}
+
+// Maps each spellbook entry to what it actually does. Defined further down
+// (castFireBolt, castEarthRing, etc. live near the systems they use) but
+// referenced here — safe because these are all function declarations,
+// hoisted, and never actually called until a cast completes at runtime.
+function triggerSpellEffect(spellName) {
+  switch (spellName) {
+    case "Ember Burst":
+      castFireBolt();
+      break;
+    case "Stoneskin":
+      castEarthRing();
+      break;
+    case "Rockfall":
+      castEarthBarricade();
+      break;
+    case "Gale Step":
+      castWindExplosion();
+      break;
+    case "Tide Call":
+      castTideCall();
+      break;
+  }
 }
 
 // Only the most recently pressed direction is lit, in a single fixed color
@@ -219,6 +273,7 @@ const POND_SAND_RADIUS = 158;
 
 const RIVER_COUNT = 2;
 const RIVER_MIN_GAP = RIVER_OUTLINE_WIDTH + 120; // clear separation kept between river spines
+const RIVER_CAMPFIRE_CLEARANCE = CLEARING_RADIUS + 120; // how far every river segment must stay from the campfire
 
 let rivers = []; // array of smoothed polylines, one per river spine
 let ponds = []; // [{x, y, sandRadius, sandPoints, waterPoints}]
@@ -258,15 +313,14 @@ function generateRiverSpine(startAngle, endAngle) {
 
   const STEPS = 14;
   const points = [start];
-  const minDistFromCampfire = CLEARING_RADIUS + 120;
   for (let i = 1; i < STEPS; i++) {
     const t = i / STEPS;
     let x = start.x + dx * t + perpX * (RNG.random() - 0.5) * 420;
     let y = start.y + dy * t + perpY * (RNG.random() - 0.5) * 420;
 
     const d = distFromCenter(x, y);
-    if (d < minDistFromCampfire) {
-      const scale = minDistFromCampfire / Math.max(1, d);
+    if (d < RIVER_CAMPFIRE_CLEARANCE) {
+      const scale = RIVER_CAMPFIRE_CLEARANCE / Math.max(1, d);
       x = WORLD_CENTER.x + (x - WORLD_CENTER.x) * scale;
       y = WORLD_CENTER.y + (y - WORLD_CENTER.y) * scale;
     }
@@ -308,6 +362,21 @@ function riverConflicts(points, existingRivers, minGap) {
   return false;
 }
 
+// Per-point clearing avoidance in generateRiverSpine() only keeps each
+// sampled *point* clear of the campfire — the straight segment *between*
+// two clear points can still cut closer to the center than either endpoint
+// (e.g. two points on opposite sides of the clearing, both individually far
+// enough away). This checks the actual segments, which is what matters for
+// "never spawn under the campfire."
+function riverTooCloseToCampfire(points, minDist) {
+  for (let i = 0; i < points.length - 1; i++) {
+    if (distToSegment(WORLD_CENTER.x, WORLD_CENTER.y, points[i].x, points[i].y, points[i + 1].x, points[i + 1].y) < minDist) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // A handful of independent river spines (RIVER_COUNT), spread around the
 // compass so they don't all cross the same stretch of forest, each with one
 // pond dropped along its length where it visibly widens — the same "stream
@@ -325,7 +394,9 @@ function generateWater() {
       const startAngle = baseAngle + (i / RIVER_COUNT) * Math.PI * 2 + (RNG.random() - 0.5) * 0.6;
       const endAngle = startAngle + Math.PI + (RNG.random() - 0.5) * 1.2;
       const candidate = generateRiverSpine(startAngle, endAngle);
-      if (!riverConflicts(candidate, rivers, RIVER_MIN_GAP)) points = candidate;
+      if (!riverConflicts(candidate, rivers, RIVER_MIN_GAP) && !riverTooCloseToCampfire(candidate, RIVER_CAMPFIRE_CLEARANCE)) {
+        points = candidate;
+      }
     }
     if (!points) continue; // couldn't find a clear path after several tries — skip rather than force an overlap
     rivers.push(points);
@@ -361,6 +432,11 @@ function distToSegment(px, py, x1, y1, x2, y2) {
 // as part of the water feature, so the player is stopped there rather than
 // being able to walk out onto the sand first.
 function isPointInWater(x, y) {
+  // Ice bridges (js/game.js "Obstacles" section below) punch a walkable
+  // hole through water collision — checked first so they always win.
+  for (const bridge of iceBridges) {
+    if (distToSegment(x, y, bridge.x1, bridge.y1, bridge.x2, bridge.y2) < bridge.width / 2) return false;
+  }
   for (const points of rivers) {
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i];
@@ -431,6 +507,229 @@ function drawWater(camera) {
   }
 }
 
+// --- Obstacles (spell-created) ----------------------------------------------
+
+// Temporary blockers from Stoneskin (a ring of pillars around the caster)
+// and Rockfall (a single barricade line) — the same shape vocabulary as
+// water collision (circles/segments), checked alongside it everywhere
+// movement is resolved. Each carries expiresAt (performance.now() ms) and
+// is swept out once past it.
+let obstacles = [];
+let iceBridges = [];
+
+function isPointBlocked(x, y) {
+  for (const obs of obstacles) {
+    if (obs.type === "circle") {
+      if (Math.hypot(x - obs.x, y - obs.y) < obs.radius) return true;
+    } else if (distToSegment(x, y, obs.x1, obs.y1, obs.x2, obs.y2) < obs.width / 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pruneExpired(list, now) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (now >= list[i].expiresAt) list.splice(i, 1);
+  }
+}
+
+const EARTH_RING_DURATION_MS = 12000;
+const EARTH_RING_RADIUS = 90; // ring drawn around the caster
+const EARTH_PILLAR_RADIUS = 24; // each pillar's own collision radius
+
+function castEarthRing() {
+  const now = performance.now();
+  const pillarCount = 7;
+  for (let i = 0; i < pillarCount; i++) {
+    const angle = (i / pillarCount) * Math.PI * 2;
+    obstacles.push({
+      type: "circle",
+      kind: "earthPillar",
+      x: player.x + Math.cos(angle) * EARTH_RING_RADIUS,
+      y: player.y + Math.sin(angle) * EARTH_RING_RADIUS,
+      radius: EARTH_PILLAR_RADIUS,
+      expiresAt: now + EARTH_RING_DURATION_MS,
+    });
+  }
+}
+
+const EARTH_BARRICADE_DURATION_MS = 12000;
+const EARTH_BARRICADE_DISTANCE = 70; // how far in front of the caster it appears
+const EARTH_BARRICADE_LENGTH = 160;
+const EARTH_BARRICADE_WIDTH = 40;
+
+function castEarthBarricade() {
+  const cx = player.x + player.facingX * EARTH_BARRICADE_DISTANCE;
+  const cy = player.y + player.facingY * EARTH_BARRICADE_DISTANCE;
+  // Perpendicular to the cast direction, so it blocks the path ahead.
+  const perpX = -player.facingY;
+  const perpY = player.facingX;
+  obstacles.push({
+    type: "segment",
+    kind: "earthBarricade",
+    x1: cx - perpX * (EARTH_BARRICADE_LENGTH / 2),
+    y1: cy - perpY * (EARTH_BARRICADE_LENGTH / 2),
+    x2: cx + perpX * (EARTH_BARRICADE_LENGTH / 2),
+    y2: cy + perpY * (EARTH_BARRICADE_LENGTH / 2),
+    width: EARTH_BARRICADE_WIDTH,
+    angle: Math.atan2(perpY, perpX),
+    expiresAt: performance.now() + EARTH_BARRICADE_DURATION_MS,
+  });
+}
+
+function drawObstacles(camera) {
+  for (const obs of obstacles) {
+    if (obs.kind === "earthPillar") {
+      drawGroundSprite(ForestAssets.spellEffects.earthWallPillar, { x: obs.x, y: obs.y, scale: 1, flip: false }, camera);
+    } else if (obs.kind === "earthBarricade") {
+      const asset = ForestAssets.spellEffects.earthWallBarricade;
+      const midX = (obs.x1 + obs.x2) / 2;
+      const midY = (obs.y1 + obs.y2) / 2;
+      const screenX = midX - camera.x;
+      const screenY = midY - camera.y;
+      ctx.save();
+      ctx.translate(screenX, screenY);
+      ctx.rotate(obs.angle);
+      ctx.drawImage(asset.image, -asset.width / 2, -asset.height * asset.groundFraction, asset.width, asset.height);
+      ctx.restore();
+    }
+  }
+}
+
+// --- Ice bridge (spell-created) ---------------------------------------------
+
+const ICE_BRIDGE_DURATION_MS = 30000;
+const ICE_BRIDGE_LENGTH = 220;
+const ICE_BRIDGE_WIDTH = 70;
+const WATER_SPELL_RANGE = 150; // how close the player must be to draw on water at all
+
+function isNearWater(x, y, range) {
+  // Cheap approximation: probe a small ring of points around (x,y) rather
+  // than a true distance-to-water-shape query — good enough for "am I
+  // standing at the water's edge" and reuses isPointInWater as-is.
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    if (isPointInWater(x + Math.cos(angle) * range, y + Math.sin(angle) * range)) return true;
+  }
+  return isPointInWater(x, y);
+}
+
+function castIceBridge() {
+  iceBridges.push({
+    x1: player.x,
+    y1: player.y,
+    x2: player.x + player.facingX * ICE_BRIDGE_LENGTH,
+    y2: player.y + player.facingY * ICE_BRIDGE_LENGTH,
+    width: ICE_BRIDGE_WIDTH,
+    expiresAt: performance.now() + ICE_BRIDGE_DURATION_MS,
+  });
+}
+
+// Tide Call is context-sensitive: near a healing pool specifically, it
+// draws healing water from it; near any other water (river/pond), it
+// freezes a crossing instead. Both need water/a pool within reach, so
+// casting it away from any water does nothing.
+function castTideCall() {
+  const pool = findNearbyHealingPool(player.x, player.y, WATER_SPELL_RANGE);
+  if (pool && !pool.depleted) {
+    player.heal(HEALING_HEAL_AMOUNT);
+    pool.depleted = true;
+    pool.regenAt = performance.now() + HEALING_POOL_REGEN_MS;
+    spawnEffect(player.x, player.y, "healBurst", 0.8);
+    return;
+  }
+  if (isNearWater(player.x, player.y, WATER_SPELL_RANGE)) {
+    castIceBridge();
+  }
+}
+
+function drawIceBridges(camera) {
+  const segmentAsset = ForestAssets.spellEffects.iceBridgeSegment;
+  for (const bridge of iceBridges) {
+    const dx = bridge.x2 - bridge.x1;
+    const dy = bridge.y2 - bridge.y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const angle = Math.atan2(dy, dx);
+    const step = segmentAsset.width * 0.7; // slight overlap between tiles
+    const count = Math.max(1, Math.ceil(len / step));
+    for (let i = 0; i < count; i++) {
+      const t = (i + 0.5) / count;
+      const x = bridge.x1 + dx * t;
+      const y = bridge.y1 + dy * t;
+      const screenX = x - camera.x;
+      const screenY = y - camera.y;
+      ctx.save();
+      ctx.translate(screenX, screenY);
+      ctx.rotate(angle);
+      ctx.drawImage(segmentAsset.image, -segmentAsset.width / 2, -segmentAsset.height * segmentAsset.groundFraction, segmentAsset.width, segmentAsset.height);
+      ctx.restore();
+    }
+  }
+}
+
+// --- Healing pools -----------------------------------------------------------
+
+const HEALING_POOL_COUNT = 2;
+const HEALING_POOL_RADIUS = 90; // sand-edge radius, used for placement + interact range
+const HEALING_POOL_REGEN_MS = 45000;
+const HEALING_HEAL_AMOUNT = 45;
+
+let healingPools = [];
+
+function generateHealingPools() {
+  healingPools = [];
+  let attempts = 0;
+  while (healingPools.length < HEALING_POOL_COUNT && attempts < HEALING_POOL_COUNT * 40) {
+    attempts++;
+    const p = sampleAnnulus(CLEARING_RADIUS + 200, WALL_START);
+    if (isPointInWater(p.x, p.y)) continue;
+    if (spatialIndex.hasOverlap(p.x, p.y, HEALING_POOL_RADIUS, 0.9)) continue;
+    const seed = RNG.random() * 100;
+    const pool = {
+      x: p.x,
+      y: p.y,
+      sandPoints: blobPoints(p.x, p.y, HEALING_POOL_RADIUS, HEALING_POOL_RADIUS * 0.85, seed),
+      waterPoints: blobPoints(p.x, p.y, HEALING_POOL_RADIUS * 0.8, HEALING_POOL_RADIUS * 0.68, seed + 5),
+      depleted: false,
+      regenAt: 0,
+    };
+    spatialIndex.insert(p.x, p.y, HEALING_POOL_RADIUS);
+    healingPools.push(pool);
+  }
+}
+
+function findNearbyHealingPool(x, y, range) {
+  for (const pool of healingPools) {
+    if (Math.hypot(x - pool.x, y - pool.y) < range + HEALING_POOL_RADIUS) return pool;
+  }
+  return null;
+}
+
+function updateHealingPools(now) {
+  for (const pool of healingPools) {
+    if (pool.depleted && now >= pool.regenAt) pool.depleted = false;
+  }
+}
+
+function drawHealingPools(camera) {
+  for (const pool of healingPools) {
+    drawBlob(pool.sandPoints, camera, "#c9a877");
+    if (!pool.depleted) {
+      const screenX = pool.x - camera.x;
+      const screenY = pool.y - camera.y;
+      const glow = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, HEALING_POOL_RADIUS * 1.3);
+      glow.addColorStop(0, "rgba(143, 217, 176, 0.35)");
+      glow.addColorStop(1, "rgba(143, 217, 176, 0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, HEALING_POOL_RADIUS * 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    drawBlob(pool.waterPoints, camera, pool.depleted ? "#a9865a" : "#8fd9b0");
+  }
+}
+
 // --- Player movement & rendering (shared with multiplayer) -----------------
 
 const PLAYER_BASE_SPEED = 220; // pixels per second
@@ -471,13 +770,13 @@ function simulatePlayerMovement(state, input, dt) {
     let speed = state.dashTimeLeft > 0 ? PLAYER_BASE_SPEED * DASH_SPEED_MULTIPLIER : PLAYER_BASE_SPEED;
     if (state.isCasting) speed = PLAYER_BASE_SPEED * CAST_SPEED_MULTIPLIER;
 
-    // Axis-separated water collision: try each axis independently so
-    // walking into a bank at an angle slides along the shore instead of
-    // stopping dead, but crossing the water itself is never possible.
+    // Axis-separated collision against water and spell-created obstacles:
+    // try each axis independently so walking into one at an angle slides
+    // along it instead of stopping dead, but crossing it is never possible.
     const newX = state.x + dx * speed * dt;
     const newY = state.y + dy * speed * dt;
-    if (!isPointInWater(newX, state.y)) state.x = newX;
-    if (!isPointInWater(state.x, newY)) state.y = newY;
+    if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y)) state.x = newX;
+    if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY)) state.y = newY;
   }
 
   const dist = distFromCenter(state.x, state.y);
@@ -580,6 +879,464 @@ class Player {
 
   draw(ctx, camera) {
     drawPlayerLike(ctx, camera, this);
+  }
+}
+
+// --- Golems ------------------------------------------------------------------
+
+// Local-only simulation: every client runs its own golem AI against its own
+// local player, rather than the host broadcasting golem state like it does
+// for players. Spawn points come from the seeded RNG during world
+// generation (so they line up across a multiplayer session), but the
+// ongoing chase/attack behavior is not synced — a known v1 simplification.
+const GOLEM_COUNT = 3;
+const GOLEM_SCALE = 0.55;
+const GOLEM_MAX_HEALTH = 120;
+const GOLEM_AGGRO_RADIUS = 420; // focus: start chasing once the player is this close
+const GOLEM_LEASH_RADIUS = 650; // unfocus: give up once the player (or the golem itself) strays this far
+const GOLEM_ATTACK_RANGE = 70;
+const GOLEM_ATTACK_WINDUP = 0.5; // telegraph before the hit lands
+const GOLEM_ATTACK_COOLDOWN = 1.6; // total time in the "attacking" state, windup included
+const GOLEM_ATTACK_DAMAGE = 8;
+const GOLEM_SPEED = 70; // slower than the player — lumbering, not chaseable-proof
+const GOLEM_RESPAWN_MS = 20000;
+
+let golems = [];
+
+function spawnGolems() {
+  golems = [];
+  let attempts = 0;
+  while (golems.length < GOLEM_COUNT && attempts < GOLEM_COUNT * 40) {
+    attempts++;
+    const p = sampleAnnulus(CLEARING_RADIUS + 300, WALL_START);
+    if (isPointInWater(p.x, p.y)) continue;
+    if (spatialIndex.hasOverlap(p.x, p.y, 60, 0.7)) continue;
+    spatialIndex.insert(p.x, p.y, 60);
+    golems.push({
+      x: p.x,
+      y: p.y,
+      spawnX: p.x,
+      spawnY: p.y,
+      health: GOLEM_MAX_HEALTH,
+      state: "idle", // "idle" | "chasing" | "attacking" | "dead"
+      facingX: 0,
+      facingY: 1,
+      attackWindup: 0,
+      attackCooldown: 0,
+      animPhase: RNG.random() * 10,
+      deathTimer: 0,
+    });
+  }
+}
+
+function killGolem(golem) {
+  golem.state = "dead";
+  golem.deathTimer = GOLEM_RESPAWN_MS;
+}
+
+function updateGolem(golem, dt) {
+  if (golem.state === "dead") {
+    golem.deathTimer -= dt * 1000;
+    if (golem.deathTimer <= 0) {
+      golem.health = GOLEM_MAX_HEALTH;
+      golem.x = golem.spawnX;
+      golem.y = golem.spawnY;
+      golem.state = "idle";
+    }
+    return;
+  }
+
+  const distToPlayer = Math.hypot(player.x - golem.x, player.y - golem.y);
+  const distFromSpawn = Math.hypot(golem.x - golem.spawnX, golem.y - golem.spawnY);
+
+  if (golem.attackCooldown > 0) golem.attackCooldown -= dt;
+
+  if (golem.state === "attacking") {
+    if (golem.attackWindup > 0) {
+      golem.attackWindup -= dt;
+      if (golem.attackWindup <= 0 && distToPlayer <= GOLEM_ATTACK_RANGE + 20) {
+        player.takeDamage(GOLEM_ATTACK_DAMAGE);
+      }
+    }
+    if (golem.attackCooldown <= 0) {
+      golem.state = distToPlayer <= GOLEM_AGGRO_RADIUS ? "chasing" : "idle";
+    }
+    return;
+  }
+
+  // Focus / unfocus.
+  if (golem.state !== "chasing" && distToPlayer <= GOLEM_AGGRO_RADIUS) {
+    golem.state = "chasing";
+  }
+  if (golem.state === "chasing" && (distToPlayer > GOLEM_LEASH_RADIUS || distFromSpawn > GOLEM_LEASH_RADIUS)) {
+    golem.state = "idle";
+  }
+
+  if (golem.state === "chasing") {
+    if (distToPlayer <= GOLEM_ATTACK_RANGE) {
+      golem.state = "attacking";
+      golem.attackWindup = GOLEM_ATTACK_WINDUP;
+      golem.attackCooldown = GOLEM_ATTACK_COOLDOWN;
+      golem.facingX = (player.x - golem.x) / (distToPlayer || 1);
+      golem.facingY = (player.y - golem.y) / (distToPlayer || 1);
+    } else {
+      const dx = (player.x - golem.x) / (distToPlayer || 1);
+      const dy = (player.y - golem.y) / (distToPlayer || 1);
+      const newX = golem.x + dx * GOLEM_SPEED * dt;
+      const newY = golem.y + dy * GOLEM_SPEED * dt;
+      if (!isPointInWater(newX, newY) && !isPointBlocked(newX, newY)) {
+        golem.x = newX;
+        golem.y = newY;
+      }
+      golem.facingX = dx;
+      golem.facingY = dy;
+    }
+  }
+
+  golem.animPhase += dt;
+}
+
+function updateGolems(dt) {
+  for (const golem of golems) updateGolem(golem, dt);
+}
+
+function rotateAround(p, pivot, angle) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = p.x - pivot.x;
+  const dy = p.y - pivot.y;
+  return { x: pivot.x + dx * cos - dy * sin, y: pivot.y + dx * sin + dy * cos };
+}
+
+// Per-group rotation angles driven by the golem's current state/animPhase —
+// idle sway, a walk cycle while chasing, and a wind-up/strike while attacking.
+function computeGolemAngles(golem) {
+  const angles = { head: 0, armL: 0, armR: 0, legL: 0, legR: 0, torso: 0 };
+
+  if (golem.state === "attacking") {
+    if (golem.attackWindup > 0) {
+      const t = 1 - golem.attackWindup / GOLEM_ATTACK_WINDUP; // 0 -> 1 through the telegraph
+      angles.armR = -0.9 * t;
+      angles.head = -0.15 * t;
+    } else {
+      const strikeDuration = GOLEM_ATTACK_COOLDOWN - GOLEM_ATTACK_WINDUP;
+      const t = strikeDuration > 0 ? 1 - Math.max(0, golem.attackCooldown / strikeDuration) : 1;
+      angles.armR = 0.6 * (1 - Math.min(1, t));
+    }
+  } else if (golem.state === "chasing") {
+    const walk = Math.sin(golem.animPhase * 6);
+    angles.legL = walk * 0.5;
+    angles.legR = -walk * 0.5;
+    angles.armL = -walk * 0.3;
+    angles.armR = walk * 0.3;
+    angles.torso = walk * 0.03;
+  } else {
+    const sway = Math.sin(golem.animPhase * 1.4);
+    angles.armL = sway * 0.08;
+    angles.armR = -sway * 0.08;
+    angles.head = sway * 0.05;
+  }
+  return angles;
+}
+
+function golemLocalToWorld(local, golem, flip) {
+  const rig = ForestAssets.golemRig;
+  return {
+    x: golem.x + (local.x - rig.groundAnchor.x) * GOLEM_SCALE * flip,
+    y: golem.y + (local.y - rig.groundAnchor.y) * GOLEM_SCALE,
+  };
+}
+
+function drawGolemPolygon(points, pivot, angle, golem, flip, camera, fill) {
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const rotated = angle ? rotateAround(p, pivot, angle) : p;
+    const world = golemLocalToWorld(rotated, golem, flip);
+    const sx = world.x - camera.x;
+    const sy = world.y - camera.y;
+    if (i === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+  });
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = "#2a1f18";
+  ctx.lineWidth = 2.5;
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawGolemEllipse(local, rx, ry, pivot, angle, golem, flip, camera, fill) {
+  const rotated = angle ? rotateAround(local, pivot, angle) : local;
+  const world = golemLocalToWorld(rotated, golem, flip);
+  ctx.beginPath();
+  ctx.ellipse(world.x - camera.x, world.y - camera.y, rx * GOLEM_SCALE, ry * GOLEM_SCALE, 0, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function drawGolem(golem, camera) {
+  if (golem.state === "dead") return;
+
+  const rig = ForestAssets.golemRig;
+  const flip = golem.facingX < 0 ? -1 : 1;
+  const angles = computeGolemAngles(golem);
+
+  // Shadow
+  const groundWorld = golemLocalToWorld(rig.groundAnchor, golem, flip);
+  const gsx = groundWorld.x - camera.x;
+  const gsy = groundWorld.y - camera.y;
+  ctx.beginPath();
+  ctx.ellipse(gsx, gsy, 46 * GOLEM_SCALE, 14 * GOLEM_SCALE, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+  ctx.fill();
+
+  // Fixed decorations drawn first (they sit beneath/behind the moving segments).
+  for (const socket of rig.sockets) {
+    drawGolemEllipse(socket, socket.rx, socket.ry, socket, 0, golem, flip, camera, "#5f5a4f");
+  }
+
+  // Legs and torso behind the arms/head.
+  const legL = rig.groups.legL;
+  const legR = rig.groups.legR;
+  for (const key of legL.segments) drawGolemPolygon(rig.segments[key].points, legL.pivot, angles.legL, golem, flip, camera, rig.segments[key].fill);
+  for (const key of legR.segments) drawGolemPolygon(rig.segments[key].points, legR.pivot, angles.legR, golem, flip, camera, rig.segments[key].fill);
+
+  const torso = rig.groups.torso;
+  for (const key of torso.segments) drawGolemPolygon(rig.segments[key].points, torso.pivot, angles.torso, golem, flip, camera, rig.segments[key].fill);
+
+  // Moss patches + glowing cracks over the torso, before the arms/head so
+  // the limbs can overlap them naturally.
+  for (const moss of rig.moss) {
+    drawGolemEllipse(moss, moss.rx, moss.ry, torso.pivot, angles.torso, golem, flip, camera, "#5c6b3f");
+  }
+  ctx.save();
+  ctx.strokeStyle = "#c9622f";
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.75;
+  for (const crack of rig.cracks) {
+    ctx.beginPath();
+    const pts = crack.match(/[\d.]+/g).map(Number);
+    for (let i = 0; i < pts.length; i += 2) {
+      const world = golemLocalToWorld({ x: pts[i], y: pts[i + 1] }, golem, flip);
+      const sx = world.x - camera.x;
+      const sy = world.y - camera.y;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const armL = rig.groups.armL;
+  const armR = rig.groups.armR;
+  for (const key of armL.segments) drawGolemPolygon(rig.segments[key].points, armL.pivot, angles.armL, golem, flip, camera, rig.segments[key].fill);
+  for (const key of armR.segments) drawGolemPolygon(rig.segments[key].points, armR.pivot, angles.armR, golem, flip, camera, rig.segments[key].fill);
+
+  const head = rig.groups.head;
+  for (const key of head.segments) drawGolemPolygon(rig.segments[key].points, head.pivot, angles.head, golem, flip, camera, rig.segments[key].fill);
+
+  // Eyes glow on top of the head.
+  ctx.fillStyle = "#e8a24a";
+  for (const eye of rig.eyes) {
+    const rotated = angles.head ? rotateAround(eye, head.pivot, angles.head) : eye;
+    const world = golemLocalToWorld(rotated, golem, flip);
+    ctx.beginPath();
+    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * GOLEM_SCALE, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Health bar over the head while below full — a quick read on how close
+  // it is to going down without needing a persistent HUD element per enemy.
+  if (golem.health < GOLEM_MAX_HEALTH) {
+    const barWorld = golemLocalToWorld({ x: rig.groundAnchor.x, y: 10 }, golem, flip);
+    const bx = barWorld.x - camera.x;
+    const by = barWorld.y - camera.y;
+    const w = 50;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+    ctx.fillRect(bx - w / 2, by, w, 6);
+    ctx.fillStyle = "#a63d3d";
+    ctx.fillRect(bx - w / 2, by, w * Math.max(0, golem.health / GOLEM_MAX_HEALTH), 6);
+  }
+}
+
+// --- Projectiles ---------------------------------------------------------------
+
+const FIRE_BOLT_SPEED = 480;
+const FIRE_BOLT_RANGE = 620;
+const FIRE_BOLT_DAMAGE = 30;
+const FIRE_BOLT_HIT_RADIUS = 42;
+
+let projectiles = [];
+
+function castFireBolt() {
+  projectiles.push({
+    x: player.x,
+    y: player.y,
+    vx: player.facingX * FIRE_BOLT_SPEED,
+    vy: player.facingY * FIRE_BOLT_SPEED,
+    traveled: 0,
+  });
+}
+
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    const stepX = p.vx * dt;
+    const stepY = p.vy * dt;
+    p.x += stepX;
+    p.y += stepY;
+    p.traveled += Math.hypot(stepX, stepY);
+
+    let hit = false;
+    for (const golem of golems) {
+      if (golem.state === "dead") continue;
+      if (Math.hypot(p.x - golem.x, p.y - golem.y) < FIRE_BOLT_HIT_RADIUS) {
+        golem.health -= FIRE_BOLT_DAMAGE;
+        spawnEffect(p.x, p.y, "fireImpact", 0.4);
+        if (golem.health <= 0) killGolem(golem);
+        hit = true;
+        break;
+      }
+    }
+
+    if (hit || p.traveled > FIRE_BOLT_RANGE || isPointBlocked(p.x, p.y)) {
+      if (!hit) spawnEffect(p.x, p.y, "fireImpact", 0.3);
+      projectiles.splice(i, 1);
+    }
+  }
+}
+
+function drawProjectile(p, camera) {
+  const asset = ForestAssets.spellEffects.fireBolt;
+  const angle = Math.atan2(p.vy, p.vx);
+  const screenX = p.x - camera.x;
+  const screenY = p.y - camera.y;
+  ctx.save();
+  ctx.translate(screenX, screenY);
+  ctx.rotate(angle);
+  ctx.drawImage(asset.image, -asset.width * 0.25, -asset.height / 2, asset.width, asset.height);
+  ctx.restore();
+}
+
+// --- One-shot spell effects ----------------------------------------------------
+
+let effects = [];
+
+function spawnEffect(x, y, type, duration) {
+  effects.push({ x, y, type, age: 0, duration });
+}
+
+function updateEffects(dt) {
+  for (let i = effects.length - 1; i >= 0; i--) {
+    effects[i].age += dt;
+    if (effects[i].age >= effects[i].duration) effects.splice(i, 1);
+  }
+}
+
+function drawEffect(effect, camera) {
+  const t = effect.age / effect.duration; // 0 -> 1
+  const screenX = effect.x - camera.x;
+  const screenY = effect.y - camera.y;
+
+  if (effect.type === "fireImpact") {
+    const asset = ForestAssets.spellEffects.fireImpact;
+    const scale = 0.7 + t * 0.5;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - t);
+    ctx.translate(screenX, screenY);
+    ctx.scale(scale, scale);
+    ctx.drawImage(asset.image, -asset.width / 2, -asset.height / 2, asset.width, asset.height);
+    ctx.restore();
+    return;
+  }
+
+  if (effect.type === "healBurst") {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - t);
+    ctx.strokeStyle = "#a8e6c8";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, 20 + t * 40, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, 10 + t * 24, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#f0fff8";
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    const armLen = 14 + t * 6;
+    ctx.beginPath();
+    ctx.moveTo(screenX, screenY - armLen);
+    ctx.lineTo(screenX, screenY + armLen);
+    ctx.moveTo(screenX - armLen, screenY);
+    ctx.lineTo(screenX + armLen, screenY);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  if (effect.type === "windExplosion") {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - t);
+    const radius = 20 + t * 90;
+    ctx.strokeStyle = "#d8f0f0";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, radius * 0.35, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#bfe3e3";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, radius * 0.65, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = Math.max(0, (1 - t) * 0.6);
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = "#d8f0f0";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    ctx.globalAlpha = Math.max(0, 1 - t);
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const inner = radius * 0.7;
+      const outer = radius * 0.85;
+      ctx.beginPath();
+      ctx.moveTo(screenX + Math.cos(angle) * inner, screenY + Math.sin(angle) * inner);
+      ctx.lineTo(screenX + Math.cos(angle) * outer, screenY + Math.sin(angle) * outer);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#d8f0f0";
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+const WIND_EXPLOSION_RADIUS = 220;
+const WIND_KNOCKBACK_FORCE = 260;
+
+function castWindExplosion() {
+  spawnEffect(player.x, player.y, "windExplosion", 0.7);
+  for (const golem of golems) {
+    if (golem.state === "dead") continue;
+    const dist = Math.hypot(golem.x - player.x, golem.y - player.y);
+    if (dist >= WIND_EXPLOSION_RADIUS) continue;
+    const dx = (golem.x - player.x) / (dist || 1);
+    const dy = (golem.y - player.y) / (dist || 1);
+    const force = WIND_KNOCKBACK_FORCE * (1 - dist / WIND_EXPLOSION_RADIUS);
+    const newX = golem.x + dx * force;
+    const newY = golem.y + dy * force;
+    if (!isPointInWater(newX, newY)) {
+      golem.x = newX;
+      golem.y = newY;
+    }
+    golem.state = "idle";
+    golem.attackCooldown = 0;
+    golem.attackWindup = 0;
   }
 }
 
@@ -836,6 +1593,17 @@ function generateWorld() {
     build: (x, y) => ({ x, y, type: pickAmbientType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
   });
 
+  // --- Healing pools, golems ---
+  generateHealingPools();
+  spawnGolems();
+
+  // Transient spell state shouldn't carry over from a previous world (e.g.
+  // hosting/joining mid-session regenerates everything from a new seed).
+  obstacles = [];
+  iceBridges = [];
+  projectiles = [];
+  effects = [];
+
   // --- Player ---
   player = new Player(campfire.x, campfire.y + 110);
   // multiplayer/host-sim.js needs the host's own player to fold into its
@@ -938,7 +1706,7 @@ function drawCampfire(item, camera) {
 
 let lastTime;
 let fWasPressed = false;
-let tabWasPressed = false;
+let qWasPressed = false;
 
 const HEALTH_BAR_TRACK_WIDTH = 158; // matches the design's bar geometry (x=34..192)
 
@@ -1036,25 +1804,38 @@ function loop(now) {
     if (mp) mp.update(dt);
   }
 
+  // Combat/hazard simulation is local-only (not part of the multiplayer
+  // sync) and pauses along with the player while the campfire menu is open.
+  if (!menuOpen) {
+    updateGolems(dt);
+    updateProjectiles(dt);
+    updateEffects(dt);
+    updateHealingPools(now);
+    pruneExpired(obstacles, now);
+    pruneExpired(iceBridges, now);
+  }
+
   updateCamera();
   updateHealthBar();
 
-  // Zoom and the spellbook reference are purely local UI feedback — they
-  // read the raw key state directly rather than the (possibly host-delayed)
-  // simulated `isCasting`, so they stay instant regardless of network mode.
-  // The spellbook can be pulled up with Q at any time, not just while
-  // casting — it's a reference sheet, not something gated on being mid-spell.
-  spellbookEl.classList.toggle("visible", keys.q);
+  // Zoom is purely local UI feedback — it reads the raw key state directly
+  // rather than the (possibly host-delayed) simulated `isCasting`, so it
+  // stays instant regardless of network mode.
   const targetZoom = keys.e ? CAST_ZOOM : 1;
   camera.zoom += (targetZoom - camera.zoom) * Math.min(1, dt * ZOOM_APPROACH_RATE);
 
-  // Player list: Tab toggles it open/closed (not a hold-to-show). Ignored
-  // while the campfire menu is open, where Tab reverts to normal browser
-  // focus-cycling between that menu's own inputs and buttons (see the
-  // preventDefault condition in the keydown listener above).
-  const tabJustPressed = keys.tab && !tabWasPressed;
-  tabWasPressed = keys.tab;
-  if (tabJustPressed && !menuOpen) playerListEl.classList.toggle("visible");
+  // Spellbook: Q toggles it open/closed (press again to close), at any time,
+  // not just while casting — it's a reference sheet, not something gated on
+  // being mid-spell. Ignored while the campfire menu is open, same as Tab.
+  const qJustPressed = keys.q && !qWasPressed;
+  qWasPressed = keys.q;
+  if (qJustPressed && !menuOpen) spellbookEl.classList.toggle("visible");
+
+  // Player list: held down to show, hidden the instant Tab is released —
+  // ignored while the campfire menu is open, where Tab reverts to normal
+  // browser focus-cycling between that menu's own inputs and buttons (see
+  // the preventDefault condition in the keydown listener above).
+  playerListEl.classList.toggle("visible", keys.tab && !menuOpen);
   if (playerListEl.classList.contains("visible")) updatePlayerList(mp);
 
   // The player is always drawn at canvas center, so scaling around that
@@ -1066,6 +1847,8 @@ function loop(now) {
 
   drawGround();
   drawWater(camera);
+  drawHealingPools(camera);
+  drawIceBridges(camera);
 
   // Depth-sort every ground object, remote players, and the local player by
   // world y so nearer/taller things convincingly occlude farther ones.
@@ -1076,6 +1859,8 @@ function loop(now) {
   for (const item of mushrooms) drawables.push({ y: item.y, kind: "mushroom", item });
   for (const item of rocks) drawables.push({ y: item.y, kind: "rock", item });
   for (const item of ambientDetails) drawables.push({ y: item.y, kind: "ambient", item });
+  for (const golem of golems) drawables.push({ y: golem.y, kind: "golem", item: golem });
+  for (const p of projectiles) drawables.push({ y: p.y, kind: "projectile", item: p });
   if (mp) {
     for (const remote of mp.getRemotePlayers()) {
       drawables.push({ y: remote.y, kind: "remote", item: remote });
@@ -1093,10 +1878,15 @@ function loop(now) {
       case "rock": drawRock(d.item, camera); break;
       case "ambient": drawAmbient(d.item, camera); break;
       case "campfire": drawCampfire(d.item, camera); break;
+      case "golem": drawGolem(d.item, camera); break;
+      case "projectile": drawProjectile(d.item, camera); break;
       case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
       case "player": player.draw(ctx, camera); break;
     }
   }
+
+  drawObstacles(camera);
+  for (const effect of effects) drawEffect(effect, camera);
 
   ctx.restore();
 
