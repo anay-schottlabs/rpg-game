@@ -53,6 +53,61 @@ const ForestAssets = (() => {
         <ellipse cx="42" cy="99" rx="5" ry="3" fill="#8a5a3a" stroke="#2a1f18" stroke-width="1"/>
         <ellipse cx="104" cy="80" rx="5" ry="3" fill="#8a5a3a" stroke="#2a1f18" stroke-width="1"/>
       </svg>`,
+
+    birch: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <defs>
+          <pattern id="hatch" width="4.5" height="4.5" patternUnits="userSpaceOnUse">
+            <path d="M0,4.5 L4.5,0" stroke="#2a1f18" stroke-width="0.9"/>
+            <path d="M0,0 L4.5,4.5" stroke="#2a1f18" stroke-width="0.9"/>
+          </pattern>
+          <clipPath id="canopyClip1"><circle cx="70" cy="60" r="38"/></clipPath>
+        </defs>
+        <path d="M66,150 L66,70 L74,70 L74,150 Z" fill="#d8cdb0" stroke="#2a1f18" stroke-width="3"/>
+        <line x1="67" y1="82" x2="72" y2="84" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="68" y1="102" x2="73" y2="100" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="67" y1="124" x2="72" y2="126" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="70" cy="55" r="30" fill="#7a9457" stroke="#2a1f18" stroke-width="3.5"/>
+        <circle cx="46" cy="68" r="20" fill="#7a9457" stroke="#2a1f18" stroke-width="3.5"/>
+        <circle cx="94" cy="68" r="20" fill="#7a9457" stroke="#2a1f18" stroke-width="3.5"/>
+        <circle cx="82" cy="50" r="24" fill="url(#hatch)" opacity="0.4" clip-path="url(#canopyClip1)"/>
+      </svg>`,
+
+    pine: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <rect x="64" y="130" width="12" height="20" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <polygon points="70,60 112,140 28,140" fill="#3f5233" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="91,100 112,140 70,140" fill="url(#deepHatch)" opacity="0.4"/>
+        <polygon points="70,35 100,105 40,105" fill="#4d6b3f" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="86,72 100,105 70,105" fill="url(#deepHatch)" opacity="0.4"/>
+        <polygon points="70,14 90,70 50,70" fill="#5c7a4a" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+      </svg>`,
+
+    willow: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <defs>
+          <pattern id="hatch" width="4.5" height="4.5" patternUnits="userSpaceOnUse">
+            <path d="M0,4.5 L4.5,0" stroke="#2a1f18" stroke-width="0.9"/>
+            <path d="M0,0 L4.5,4.5" stroke="#2a1f18" stroke-width="0.9"/>
+          </pattern>
+          <clipPath id="canopyClip1"><circle cx="70" cy="60" r="38"/></clipPath>
+        </defs>
+        <path d="M66,150 L64,95 L76,95 L74,150 Z" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="70" cy="75" r="32" fill="#6b8049" stroke="#2a1f18" stroke-width="3.5"/>
+        <circle cx="82" cy="68" r="22" fill="url(#hatch)" opacity="0.4" clip-path="url(#canopyClip1)"/>
+        <path d="M55,95 Q50,120 46,142" stroke="#4f6636" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M65,100 Q62,124 58,146" stroke="#4f6636" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M78,100 Q80,124 84,146" stroke="#4f6636" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M90,95 Q94,120 98,142" stroke="#4f6636" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <ellipse cx="46" cy="143" rx="5" ry="3" fill="#5c6b3f" stroke="#2a1f18" stroke-width="1"/>
+        <ellipse cx="98" cy="143" rx="5" ry="3" fill="#5c6b3f" stroke="#2a1f18" stroke-width="1"/>
+      </svg>`,
   };
 
   const trees = {};

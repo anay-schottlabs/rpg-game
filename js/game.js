@@ -3,6 +3,12 @@
 const canvas = document.getElementById("game-canvas");
 const ctx = canvas.getContext("2d");
 const spellbookEl = document.getElementById("spellbook");
+const lobbyEl = document.getElementById("lobby"); // the campfire menu
+const campfirePromptEl = document.getElementById("campfire-prompt");
+const playerListEl = document.getElementById("player-list");
+const playerListItemsEl = document.getElementById("player-list-items");
+const healthBarFillEl = document.getElementById("health-bar-fill");
+const healthBarSheenEl = document.getElementById("health-bar-sheen");
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -21,11 +27,20 @@ const keys = {
   shift: false,
   e: false,
   q: false,
+  f: false,
+  tab: false,
+  escape: false,
 };
 
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
-  if (key in keys) keys[key] = true;
+  if (key in keys) {
+    keys[key] = true;
+    // Tab normally cycles focus between page elements (the room-code input,
+    // buttons); once the game has started, we want it exclusively as the
+    // player-list toggle instead.
+    if (key === "tab" && lobbyEl.classList.contains("lobby-hidden")) e.preventDefault();
+  }
 });
 
 window.addEventListener("keyup", (e) => {
@@ -55,6 +70,8 @@ const RING_END = 420; // trees ramp up to full density by this radius
 const WALL_START = 2150; // the dense boundary forest begins here
 const WALL_END = 3300; // extends well past WORLD_RADIUS so wide screens never see past it
 
+const CAMPFIRE_INTERACT_RADIUS = 130; // how close the player must be to open the menu with F — wide enough that the player spawns inside it, so the prompt is visible immediately
+
 function distFromCenter(x, y) {
   return Math.hypot(x - WORLD_CENTER.x, y - WORLD_CENTER.y);
 }
@@ -78,6 +95,7 @@ function scatterWithDensity({ count, maxAttempts, sample, densityAt, footprintRa
   while (results.length < count && attempts < maxAttempts) {
     attempts++;
     const { x, y } = sample();
+    if (isPointInWater(x, y)) continue;
     const density = densityAt ? densityAt(x, y) : 1;
     if (density <= 0) continue;
     if (density < 1 && RNG.random() > density) continue;
@@ -90,6 +108,174 @@ function scatterWithDensity({ count, maxAttempts, sample, densityAt, footprintRa
     results.push(item);
   }
   return results;
+}
+
+// --- Water -------------------------------------------------------------------
+
+// Layer widths match the design kit's river cards (a 4-stroke stack: dark
+// outline, sandy bank, dark inner outline, water fill) — only the innermost
+// (actual water) width blocks movement; the bank in between is walkable shore.
+const RIVER_OUTLINE_WIDTH = 70;
+const RIVER_BANK_WIDTH = 60;
+const RIVER_INNER_WIDTH = 49;
+const RIVER_WATER_WIDTH = 41;
+const POND_WATER_RADIUS = 130;
+const POND_SAND_RADIUS = 158;
+
+let riverPoints = []; // smoothed polyline the river spine follows
+let ponds = []; // [{x, y, waterRadius, sandPoints, waterPoints}]
+
+// Same blob-polygon algorithm as the design kit's pond generator: a ring of
+// points perturbed by two sine waves keyed on `seed`, giving an irregular
+// but consistently pond-shaped outline.
+function blobPoints(cx, cy, rx, ry, seed, count = 16) {
+  const pts = [];
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2;
+    const r = 1 + 0.14 * Math.sin(angle * 3 + seed) + 0.08 * Math.sin(angle * 7 + seed * 1.7);
+    pts.push({ x: cx + rx * r * Math.cos(angle), y: cy + ry * r * Math.sin(angle) });
+  }
+  return pts;
+}
+
+// One river spine crossing the interior forest (entering and exiting through
+// the boundary wall, curving well clear of the campfire clearing), with two
+// ponds dropped along its length so it visibly widens into them and out
+// again — the same "stream feeding a pond" composition as the design kit's
+// "Pond & Stream" card, just applied at two points along a longer river.
+function generateWater() {
+  const startAngle = RNG.random() * Math.PI * 2;
+  const endAngle = startAngle + Math.PI + (RNG.random() - 0.5) * 1.2;
+  const spineRadius = WALL_START - 100;
+
+  const start = {
+    x: WORLD_CENTER.x + Math.cos(startAngle) * spineRadius,
+    y: WORLD_CENTER.y + Math.sin(startAngle) * spineRadius,
+  };
+  const end = {
+    x: WORLD_CENTER.x + Math.cos(endAngle) * spineRadius,
+    y: WORLD_CENTER.y + Math.sin(endAngle) * spineRadius,
+  };
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const perpX = -dy / len;
+  const perpY = dx / len;
+
+  const STEPS = 14;
+  const points = [start];
+  const minDistFromCampfire = CLEARING_RADIUS + 120;
+  for (let i = 1; i < STEPS; i++) {
+    const t = i / STEPS;
+    let x = start.x + dx * t + perpX * (RNG.random() - 0.5) * 420;
+    let y = start.y + dy * t + perpY * (RNG.random() - 0.5) * 420;
+
+    const d = distFromCenter(x, y);
+    if (d < minDistFromCampfire) {
+      const scale = minDistFromCampfire / Math.max(1, d);
+      x = WORLD_CENTER.x + (x - WORLD_CENTER.x) * scale;
+      y = WORLD_CENTER.y + (y - WORLD_CENTER.y) * scale;
+    }
+    points.push({ x, y });
+  }
+  points.push(end);
+
+  riverPoints = points;
+  ponds = [];
+  const pondIndices = [Math.floor(points.length * 0.35), Math.floor(points.length * 0.68)];
+  for (const idx of pondIndices) {
+    const p = points[idx];
+    const seed = RNG.random() * 100;
+    const scale = 0.85 + RNG.random() * 0.3;
+    ponds.push({
+      x: p.x,
+      y: p.y,
+      waterRadius: POND_WATER_RADIUS * scale,
+      sandPoints: blobPoints(p.x, p.y, POND_SAND_RADIUS * scale, POND_SAND_RADIUS * scale * 0.82, seed),
+      waterPoints: blobPoints(p.x, p.y, POND_WATER_RADIUS * scale, POND_WATER_RADIUS * scale * 0.82, seed + 5),
+    });
+  }
+}
+
+function distToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq > 0 ? ((px - x1) * dx + (py - y1) * dy) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+// The only collision check in the game — shared by world generation (so
+// nothing spawns in the river/ponds) and player movement (so nothing can
+// walk into them either). See simulatePlayerMovement below.
+function isPointInWater(x, y) {
+  for (let i = 0; i < riverPoints.length - 1; i++) {
+    const a = riverPoints[i];
+    const b = riverPoints[i + 1];
+    if (distToSegment(x, y, a.x, a.y, b.x, b.y) < RIVER_WATER_WIDTH / 2) return true;
+  }
+  for (const pond of ponds) {
+    if (Math.hypot(x - pond.x, y - pond.y) < pond.waterRadius) return true;
+  }
+  return false;
+}
+
+function drawSmoothPath(ctx, points) {
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length - 1; i++) {
+    const midX = (points[i].x + points[i + 1].x) / 2;
+    const midY = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+  }
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
+}
+
+function drawBlob(points, camera, fill) {
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const sx = p.x - camera.x;
+    const sy = p.y - camera.y;
+    if (i === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+  });
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = "#2a1f18";
+  ctx.lineWidth = 3;
+  ctx.fill();
+  ctx.stroke();
+}
+
+// Drawn as flat terrain right after the ground fill, before the depth-sorted
+// object loop — trees/decoration near the bank still draw on top of it
+// normally since they're sorted afterward, so no per-segment y-sort needed.
+function drawWater(camera) {
+  if (riverPoints.length > 1) {
+    const screenPoints = riverPoints.map((p) => ({ x: p.x - camera.x, y: p.y - camera.y }));
+    const layers = [
+      { width: RIVER_OUTLINE_WIDTH, color: "#2a1f18" },
+      { width: RIVER_BANK_WIDTH, color: "#c9a877" },
+      { width: RIVER_INNER_WIDTH, color: "#2a1f18" },
+      { width: RIVER_WATER_WIDTH, color: "#4a7a7a" },
+    ];
+    for (const layer of layers) {
+      ctx.beginPath();
+      drawSmoothPath(ctx, screenPoints);
+      ctx.strokeStyle = layer.color;
+      ctx.lineWidth = layer.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.stroke();
+    }
+  }
+
+  for (const pond of ponds) {
+    drawBlob(pond.sandPoints, camera, "#c9a877");
+    drawBlob(pond.waterPoints, camera, "#4a7a7a");
+  }
 }
 
 // --- Player movement & rendering (shared with multiplayer) -----------------
@@ -132,8 +318,13 @@ function simulatePlayerMovement(state, input, dt) {
     let speed = state.dashTimeLeft > 0 ? PLAYER_BASE_SPEED * DASH_SPEED_MULTIPLIER : PLAYER_BASE_SPEED;
     if (state.isCasting) speed = PLAYER_BASE_SPEED * CAST_SPEED_MULTIPLIER;
 
-    state.x += dx * speed * dt;
-    state.y += dy * speed * dt;
+    // Axis-separated water collision: try each axis independently so
+    // walking into a bank at an angle slides along the shore instead of
+    // stopping dead, but crossing the water itself is never possible.
+    const newX = state.x + dx * speed * dt;
+    const newY = state.y + dy * speed * dt;
+    if (!isPointInWater(newX, state.y)) state.x = newX;
+    if (!isPointInWater(state.x, newY)) state.y = newY;
   }
 
   const dist = distFromCenter(state.x, state.y);
@@ -209,6 +400,19 @@ class Player {
     this.dashTimeLeft = 0;
     this.dashCooldownLeft = 0;
     this.isCasting = false;
+    this.maxHealth = 100;
+    this.health = 100;
+  }
+
+  // Nothing currently deals damage or heals — these exist so the health bar
+  // is wired to real, live state rather than a static image, ready for
+  // whatever ends up calling them (combat, hazards, etc).
+  takeDamage(amount) {
+    this.health = Math.max(0, this.health - amount);
+  }
+
+  heal(amount) {
+    this.health = Math.min(this.maxHealth, this.health + amount);
   }
 
   update(dt) {
@@ -238,8 +442,11 @@ let campfire, player;
 
 function pickTreeType() {
   const r = RNG.random();
-  if (r < 0.7) return "common";
-  if (r < 0.92) return "elder";
+  if (r < 0.4) return "common";
+  if (r < 0.58) return "birch";
+  if (r < 0.74) return "pine";
+  if (r < 0.86) return "willow";
+  if (r < 0.95) return "elder";
   return "dead";
 }
 
@@ -321,6 +528,10 @@ function generateWorld() {
   spatialIndex = WorldGen.createSpatialIndex(160);
   terrainNoise = WorldGen.createValueNoise2D();
 
+  // Generated before everything else so trees/foliage/mushrooms/rocks can
+  // check isPointInWater() and avoid spawning in the river or ponds.
+  generateWater();
+
   // --- Campfire (spawn point) ---
   campfire = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, scale: 1, flip: false };
   spatialIndex.insert(campfire.x, campfire.y, 100);
@@ -388,6 +599,7 @@ function generateWorld() {
       const dist = RNG.random() * RNG.random() * 40;
       const x = center.x + Math.cos(angle) * dist;
       const y = center.y + Math.sin(angle) * dist;
+      if (isPointInWater(x, y)) continue;
       const item = { x, y, type: "flowers", scale: 0.8 + RNG.random() * 0.3, flip: RNG.random() < 0.5 };
       const radius = foliageFootprintRadius(item);
       if (spatialIndex.hasOverlap(x, y, radius, 0.5)) continue;
@@ -417,7 +629,7 @@ function generateWorld() {
       const dist = RNG.random() * RNG.random() * 30;
       const x = center.x + Math.cos(angle) * dist;
       const y = center.y + Math.sin(angle) * dist;
-      if (distFromCenter(x, y) < CLEARING_RADIUS) continue;
+      if (distFromCenter(x, y) < CLEARING_RADIUS || isPointInWater(x, y)) continue;
       const item = { x, y, type: pickMushroomType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 };
       const radius = mushroomFootprintRadius(item);
       if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
@@ -444,7 +656,7 @@ function generateWorld() {
       const dist = RNG.random() * RNG.random() * 45;
       const x = center.x + Math.cos(angle) * dist;
       const y = center.y + Math.sin(angle) * dist;
-      if (distFromCenter(x, y) < CLEARING_RADIUS) continue;
+      if (distFromCenter(x, y) < CLEARING_RADIUS || isPointInWater(x, y)) continue;
       const item = { x, y, variant: pickRockVariant(), scale: 0.75 + RNG.random() * 0.35, flip: RNG.random() < 0.5 };
       const radius = rockFootprintRadius(item);
       if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
@@ -572,6 +784,44 @@ function drawCampfire(item, camera) {
 // --- Game loop -----------------------------------------------------------------
 
 let lastTime;
+let fWasPressed = false;
+let tabWasPressed = false;
+
+const HEALTH_BAR_TRACK_WIDTH = 158; // matches the design's bar geometry (x=34..192)
+
+function updateHealthBar() {
+  const ratio = Math.max(0, Math.min(1, player.health / player.maxHealth));
+  const width = HEALTH_BAR_TRACK_WIDTH * ratio;
+  healthBarFillEl.setAttribute("width", width);
+  healthBarSheenEl.setAttribute("width", width);
+}
+
+// Rebuilds the player-list panel's contents. Only called while it's
+// actually visible (see loop() below) — no point paying for this otherwise.
+function updatePlayerList(mp) {
+  playerListItemsEl.textContent = "";
+
+  const row = document.createElement("div");
+  row.className = "player-list-row";
+  const dot = document.createElement("span");
+  dot.className = "player-list-dot";
+  dot.style.background = player.color;
+  row.appendChild(dot);
+  row.appendChild(document.createTextNode("You"));
+  playerListItemsEl.appendChild(row);
+
+  if (!mp) return;
+  for (const remote of mp.getRemotePlayers()) {
+    const r = document.createElement("div");
+    r.className = "player-list-row";
+    const rDot = document.createElement("span");
+    rDot.className = "player-list-dot";
+    rDot.style.background = remote.color || "#e0b64a";
+    r.appendChild(rDot);
+    r.appendChild(document.createTextNode("Player " + String(remote.id).slice(0, 4)));
+    playerListItemsEl.appendChild(r);
+  }
+}
 
 function loop(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05); // clamp for tab-switch stalls
@@ -584,11 +834,38 @@ function loop(now) {
   const mp = window.Multiplayer;
   const isPeer = mp && mp.mode === "peer";
 
+  // Campfire menu: F opens it when in range, closes it when already open
+  // (from anywhere); Escape also closes it. game.js owns *when* it's shown
+  // (it's the one that knows the player's position); js/lobby.js owns what's
+  // inside it.
+  const menuOpenBefore = !lobbyEl.classList.contains("lobby-hidden");
+  const distToCampfire = Math.hypot(player.x - campfire.x, player.y - campfire.y);
+  const inCampfireRange = distToCampfire < CAMPFIRE_INTERACT_RADIUS;
+
+  const fJustPressed = keys.f && !fWasPressed;
+  fWasPressed = keys.f;
+
+  if (fJustPressed) {
+    if (menuOpenBefore) {
+      lobbyEl.classList.add("lobby-hidden");
+    } else if (inCampfireRange) {
+      lobbyEl.classList.remove("lobby-hidden");
+    }
+  } else if (menuOpenBefore && keys.escape) {
+    lobbyEl.classList.add("lobby-hidden");
+  }
+
+  const menuOpen = !lobbyEl.classList.contains("lobby-hidden");
+  campfirePromptEl.classList.toggle("hidden", !(inCampfireRange && !menuOpen));
+
   if (isPeer) {
     // Strict host authority: our own avatar is rendered from the host's
     // broadcast rather than simulated locally (see js/multiplayer/peer-sync.js).
-    // We still forward local input to the host every frame.
-    mp.update(dt);
+    // We still forward local input to the host every frame — except while
+    // the campfire menu is open, so the avatar holds still; the host will
+    // naturally treat our input as neutral once it goes stale (see
+    // INPUT_TIMEOUT_MS in host-sim.js).
+    if (!menuOpen) mp.update(dt);
     const localState = mp.getLocalOverride();
     if (localState) {
       player.x = localState.x;
@@ -599,19 +876,33 @@ function loop(now) {
       player.dashTimeLeft = localState.isDashing ? DASH_DURATION : 0;
     }
   } else {
-    player.update(dt);
-    if (mp) mp.update(dt); // host: steps every remote player and broadcasts
+    if (!menuOpen) player.update(dt);
+    // Host: always steps every remote player and broadcasts, even while the
+    // host's own campfire menu is open — otherwise opening it would freeze
+    // the game for every connected friend, not just the host.
+    if (mp) mp.update(dt);
   }
 
   updateCamera();
+  updateHealthBar();
 
-  // Zoom and the spellbook reference are purely local UI feedback for the
-  // person pressing E/Q — they read the raw key state directly rather than
-  // the (possibly host-delayed) simulated `isCasting`, so they stay instant
-  // regardless of network mode.
-  spellbookEl.classList.toggle("visible", keys.e && keys.q);
+  // Zoom and the spellbook reference are purely local UI feedback — they
+  // read the raw key state directly rather than the (possibly host-delayed)
+  // simulated `isCasting`, so they stay instant regardless of network mode.
+  // The spellbook can be pulled up with Q at any time, not just while
+  // casting — it's a reference sheet, not something gated on being mid-spell.
+  spellbookEl.classList.toggle("visible", keys.q);
   const targetZoom = keys.e ? CAST_ZOOM : 1;
   camera.zoom += (targetZoom - camera.zoom) * Math.min(1, dt * ZOOM_APPROACH_RATE);
+
+  // Player list: Tab toggles it open/closed (not a hold-to-show). Ignored
+  // while the campfire menu is open, where Tab reverts to normal browser
+  // focus-cycling between that menu's own inputs and buttons (see the
+  // preventDefault condition in the keydown listener above).
+  const tabJustPressed = keys.tab && !tabWasPressed;
+  tabWasPressed = keys.tab;
+  if (tabJustPressed && !menuOpen) playerListEl.classList.toggle("visible");
+  if (playerListEl.classList.contains("visible")) updatePlayerList(mp);
 
   // The player is always drawn at canvas center, so scaling around that
   // same point zooms in on them for free — no per-object math needed.
@@ -621,6 +912,7 @@ function loop(now) {
   ctx.translate(-canvas.width / 2, -canvas.height / 2);
 
   drawGround();
+  drawWater(camera);
 
   // Depth-sort every ground object, remote players, and the local player by
   // world y so nearer/taller things convincingly occlude farther ones.

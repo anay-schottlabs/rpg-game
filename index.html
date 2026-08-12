@@ -3,13 +3,64 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Forest RPG</title>
+  <title>Forest Game</title>
   <link href="https://fonts.googleapis.com/css2?family=Amatic+SC:wght@700&family=Nunito:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <div id="game-container">
     <canvas id="game-canvas"></canvas>
+
+    <svg id="health-bar" width="200" height="40" viewBox="0 0 200 40">
+      <rect x="2" y="2" width="196" height="36" rx="8" fill="#e8dcc0" stroke="#2a1f18" stroke-width="3"/>
+      <rect x="34" y="10" width="158" height="20" rx="4" fill="#3a2c1e" opacity="0.25"/>
+      <rect id="health-bar-fill" x="34" y="10" width="158" height="20" rx="4" fill="#a63d3d" stroke="#2a1f18" stroke-width="2"/>
+      <rect id="health-bar-sheen" x="34" y="10" width="158" height="8" rx="4" fill="#c96060" opacity="0.6"/>
+      <circle cx="18" cy="20" r="14" fill="#a63d3d" stroke="#2a1f18" stroke-width="2.5"/>
+      <path d="M18,15 C14,10 8,14 10,19 C12,23 18,27 18,27 C18,27 24,23 26,19 C28,14 22,10 18,15 Z" fill="#e8b0b0" stroke="#2a1f18" stroke-width="1"/>
+    </svg>
+
+    <!-- Hidden by default: the game plays solo immediately on load. This
+         only opens when the player interacts (F) near the campfire — see
+         the campfire-menu logic in js/game.js and js/lobby.js. -->
+    <div id="lobby" class="lobby-hidden">
+      <div class="lobby-panel">
+        <button id="lobby-close-btn" class="lobby-close" aria-label="Close">×</button>
+        <h1 class="lobby-title">Forest Game</h1>
+        <p class="lobby-subtitle">Invite friends into this world, or join theirs.</p>
+
+        <div id="lobby-connect-form">
+          <button id="lobby-host-btn" class="lobby-btn lobby-btn-primary">Host Game</button>
+          <div id="lobby-code-display" class="lobby-code hidden"></div>
+
+          <div class="lobby-join-row">
+            <input id="lobby-join-code" class="lobby-input" type="text" placeholder="Room code" maxlength="5" />
+            <button id="lobby-join-btn" class="lobby-btn">Join</button>
+          </div>
+
+          <p id="lobby-status" class="lobby-status"></p>
+        </div>
+
+        <div id="lobby-connected-status" class="hidden">
+          <div class="lobby-code" id="lobby-connected-code"></div>
+          <p class="lobby-subtitle">Players connected: <span id="lobby-connected-count"></span></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="campfire-prompt" class="hidden">Press <strong>F</strong> to gather at the campfire</div>
+
+    <div id="session-badge" class="hidden">
+      Room <span id="session-badge-code"></span> — <span id="session-badge-count"></span> player(s)
+    </div>
+
+    <div id="host-disconnected" class="hidden">Host disconnected — session ended.</div>
+
+    <!-- Player list — toggled by tapping Tab (press again to close). -->
+    <div id="player-list">
+      <div class="player-list-title">Players</div>
+      <div id="player-list-items"></div>
+    </div>
 
     <div id="spellbook">
       <div class="spellbook-page spellbook-page-left">
@@ -111,7 +162,9 @@
   </div>
 
   <script src="js/assets.js"></script>
+  <script src="js/rng.js"></script>
   <script src="js/worldgen.js"></script>
   <script src="js/game.js"></script>
+  <script type="module" src="js/lobby.js"></script>
 </body>
 </html>
