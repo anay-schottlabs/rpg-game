@@ -598,6 +598,105 @@ const ForestAssets = (() => {
     ];
   }
 
+  // Same tapered-capsule shape as legPointList, just from two absolute
+  // endpoints instead of a start point + angle/length — the player rig
+  // below is transcribed straight from the design doc's absolute path
+  // coordinates, so this is the more convenient form there.
+  function limbCapsule(x0, y0, x1, y1, width) {
+    return legPointList(x0, y0, Math.atan2(y1 - y0, x1 - x0), Math.hypot(x1 - x0, y1 - y0), width);
+  }
+
+  // Flattens a quadratic bezier (design-doc SVG "Q" commands) into a point
+  // list — the same curve-to-polyline simplification drawEnemyPathLine()
+  // already applies to the golem's cracks, just kept as actual fill
+  // geometry here instead of a stroked line.
+  function sampleQuadratic(p0, c, p1, segments = 6) {
+    const pts = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const mt = 1 - t;
+      pts.push({ x: mt * mt * p0.x + 2 * mt * t * c.x + t * t * p1.x, y: mt * mt * p0.y + 2 * mt * t * c.y + t * t * p1.y });
+    }
+    return pts;
+  }
+
+  // --- Player rig --------------------------------------------------------
+
+  // Design kit's "Player Character" section: a wizard built from separate
+  // head+hat/torso/arms/legs/weapon pieces over a 200x320 local space, so
+  // the weapon can swing independently of the walk cycle (game.js animates
+  // each group below by rotating it around its own pivot). Curved pieces
+  // (the hat cone, cloak, weapon gem) are flattened from the doc's SVG "Q"
+  // curves into fill polygons via sampleQuadratic(); the limbs are drawn as
+  // tapered capsules via limbCapsule() rather than stroked lines, since
+  // game.js's shared polygon renderer only fills closed shapes.
+  const playerRig = {
+    segments: {
+      legL: { kind: "polygon", points: limbCapsule(78, 222, 73, 296, 8), fill: "#3a3a4a" },
+      bootL: { kind: "ellipse", center: { x: 73, y: 300 }, rx: 13, ry: 9, fill: "#3a2c1e" },
+      legR: { kind: "polygon", points: limbCapsule(122, 222, 127, 296, 8), fill: "#3a3a4a" },
+      bootR: { kind: "ellipse", center: { x: 127, y: 300 }, rx: 13, ry: 9, fill: "#3a2c1e" },
+
+      armLUpper: { kind: "polygon", points: limbCapsule(58, 140, 48, 163, 8), fill: "#4a5a7a" },
+      armLLower: { kind: "polygon", points: limbCapsule(48, 163, 50, 188, 8), fill: "#4a5a7a" },
+      handL: { kind: "ellipse", center: { x: 50, y: 191 }, rx: 9, ry: 9, fill: "#e8c9a0" },
+
+      armRUpper: { kind: "polygon", points: limbCapsule(142, 140, 152, 163, 8), fill: "#4a5a7a" },
+      armRLower: { kind: "polygon", points: limbCapsule(152, 163, 150, 188, 8), fill: "#4a5a7a" },
+      handR: { kind: "ellipse", center: { x: 150, y: 191 }, rx: 9, ry: 9, fill: "#e8c9a0" },
+
+      weaponShaft: { kind: "polygon", points: limbCapsule(150, 191, 168, 100, 3), fill: "#5a4530" },
+      weaponGem: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 168, y: 100 }, { x: 150, y: 70 }, { x: 168, y: 45 }, 6),
+          ...sampleQuadratic({ x: 168, y: 45 }, { x: 186, y: 70 }, { x: 168, y: 100 }, 6).slice(1),
+        ],
+        fill: "#bcdfe8",
+      },
+
+      torso: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 55, y: 120 }, { x: 100, y: 105 }, { x: 145, y: 120 }, 6),
+          { x: 152, y: 225 },
+          ...sampleQuadratic({ x: 152, y: 225 }, { x: 100, y: 238 }, { x: 48, y: 225 }, 6),
+        ],
+        fill: "#4a5a7a",
+      },
+      torsoClasp: { kind: "ellipse", center: { x: 100, y: 118 }, rx: 7, ry: 7, fill: "#d4a53d" },
+
+      head: { kind: "ellipse", center: { x: 100, y: 82 }, rx: 29, ry: 29, fill: "#e8c9a0" },
+      hatBrim: { kind: "ellipse", center: { x: 100, y: 56 }, rx: 50, ry: 13, fill: "#4a5a7a" },
+      hatCone: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 66, y: 58 }, { x: 90, y: 6 }, { x: 106, y: 20 }, 5),
+          ...sampleQuadratic({ x: 106, y: 20 }, { x: 114, y: 30 }, { x: 92, y: 40 }, 5).slice(1),
+          ...sampleQuadratic({ x: 92, y: 40 }, { x: 120, y: 46 }, { x: 134, y: 58 }, 5).slice(1),
+        ],
+        fill: "#4a5a7a",
+      },
+      hatBand: { kind: "polygon", points: [{ x: 66, y: 50 }, { x: 134, y: 50 }, { x: 134, y: 59 }, { x: 66, y: 59 }], fill: "#d4a53d" },
+      hatGem: { kind: "polygon", points: [{ x: 94, y: 47 }, { x: 106, y: 47 }, { x: 106, y: 60 }, { x: 94, y: 60 }], fill: "#e8dcc0" },
+    },
+    // Matches the design doc's own dashed pivot markers exactly: hips for
+    // the walk cycle, shoulders for arm sway, and the weapon's own pivot at
+    // the hand grip for its swing arc (see the doc's "Dashed circles mark
+    // pivots" caption).
+    groups: {
+      legL: { segments: ["legL", "bootL"], pivot: { x: 78, y: 222 } },
+      legR: { segments: ["legR", "bootR"], pivot: { x: 122, y: 222 } },
+      armL: { segments: ["armLUpper", "armLLower", "handL"], pivot: { x: 58, y: 132 } },
+      armR: { segments: ["armRUpper", "armRLower", "handR"], pivot: { x: 142, y: 132 } },
+      weapon: { segments: ["weaponShaft", "weaponGem"], pivot: { x: 150, y: 191 } },
+      torso: { segments: ["torso", "torsoClasp"], pivot: { x: 100, y: 115 } },
+      head: { segments: ["head", "hatBrim", "hatCone", "hatBand", "hatGem"], pivot: { x: 100, y: 112 } },
+    },
+    weaponGlowCenter: { x: 168, y: 110 }, // drawn as a radial gradient in game.js, not a flat-fill segment
+    groundAnchor: { x: 100, y: 308 },
+  };
+
   // --- Biome trees -----------------------------------------------------
 
   // Unlike the Woodland Grove trees (uniform 140x160 viewBox, drawn via the
@@ -1525,5 +1624,5 @@ const ForestAssets = (() => {
     groundFraction: 0.5,
   };
 
-  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, biomeTrees, biomeFoliage, enemyRigs, npcs, hubFeatures, bossArena, crystalBarrier, barrierRingPoints, bossEffects };
+  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, playerRig, biomeTrees, biomeFoliage, enemyRigs, npcs, hubFeatures, bossArena, crystalBarrier, barrierRingPoints, bossEffects };
 })();

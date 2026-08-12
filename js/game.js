@@ -71,6 +71,13 @@ resizeCanvas();
 
 // --- Input -----------------------------------------------------------------
 
+// Casting/spellbook are locked out entirely for now — the Elder only gives
+// the player their weapon (see NPC_DEFS below), and spellcasting is meant
+// to open up later through other NPCs. Flipping this back on is all that's
+// needed once that content exists; every casting code path below already
+// just works off it.
+let SPELLS_ENABLED = false;
+
 const keys = {
   w: false,
   a: false,
@@ -102,6 +109,13 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  // Shift not being tracked at all while casting is locked out (rather than
+  // just skipping startCasting() below) means every downstream casting
+  // path — the arrow-combo capture, the cast-speed slowdown in
+  // simulatePlayerMovement — stays inert for free, and ArrowRight falls
+  // straight through to the weapon swing below instead.
+  if (key === "shift" && !SPELLS_ENABLED) return;
+
   if (key in keys) {
     const justPressed = !keys[key];
     keys[key] = true;
@@ -124,6 +138,14 @@ window.addEventListener("keydown", (e) => {
       // correctly stops matching anything and no sigil flashes.
       if (!e.repeat) castSequence.push(dir);
       updateCastingRing();
+    }
+  } else if (key === "arrowright") {
+    // The weapon swing — only once the Elder's granted one (see NPC_DEFS),
+    // and only outside a menu/dialogue/dev console, same guard as the
+    // campfire/NPC F-key interactions in loop() below.
+    e.preventDefault();
+    if (player && lobbyEl.classList.contains("lobby-hidden") && !activeDialogue && !devConsoleOpen) {
+      player.triggerSwing();
     }
   }
 
@@ -1029,11 +1051,12 @@ function clampToWorld(state) {
 // multiplayer, js/multiplayer/host-sim.js — which drives every remote
 // player through this exact same function every frame so movement rules
 // are identical no matter who's simulating whom. `state` is mutated in
-// place ({x,y,facingX,facingY,dashTimeLeft,isCasting}).
+// place ({x,y,facingX,facingY,dashTimeLeft,isCasting,isWalking}).
 // `input` is {dx,dy,e} where dx/dy are raw -1/0/1 axis intent.
 function simulatePlayerMovement(state, input, dt) {
   const hasInput = input.dx !== 0 || input.dy !== 0;
   state.isCasting = input.e;
+  state.isWalking = hasInput;
 
   if (state.dashTimeLeft > 0) state.dashTimeLeft -= dt;
 
@@ -1116,18 +1139,186 @@ function drawPlayerLike(ctx, camera, state) {
   ctx.fill();
 }
 
+// --- Player character rig (design doc's "Player Character" section) ------
+// Local-only — remote players still render as the simple dot via
+// drawPlayerLike() above; syncing hasWeapon/swing state over multiplayer
+// isn't wired up yet.
+
+const PLAYER_RIG_SCALE = 0.19; // maps the rig's 200x320 local space onto the ~28px-wide player
+
+function playerLocalToWorld(local, state, flip) {
+  const anchor = ForestAssets.playerRig.groundAnchor;
+  return {
+    x: state.x + (local.x - anchor.x) * PLAYER_RIG_SCALE * flip,
+    y: state.y + (local.y - anchor.y) * PLAYER_RIG_SCALE,
+  };
+}
+
+function drawPlayerPolygon(points, pivot, angle, state, flip, camera, fill) {
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const rotated = angle ? rotateAround(p, pivot, angle) : p;
+    const world = playerLocalToWorld(rotated, state, flip);
+    const sx = world.x - camera.x, sy = world.y - camera.y;
+    if (i === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+  });
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = "#2a1f18";
+  ctx.lineWidth = 1.6;
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawPlayerEllipse(local, rx, ry, pivot, angle, state, flip, camera, fill) {
+  const rotated = angle ? rotateAround(local, pivot, angle) : local;
+  const world = playerLocalToWorld(rotated, state, flip);
+  ctx.beginPath();
+  ctx.ellipse(world.x - camera.x, world.y - camera.y, rx * PLAYER_RIG_SCALE, ry * PLAYER_RIG_SCALE, 0, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = "#2a1f18";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+}
+
+// Weapon swing: right arrow (see the keydown listener above), only while
+// not casting and only once a weapon's been granted (see the Elder's
+// dialogue in "--- Spawn Hub (Village) ---" below). Windup pulls the
+// weapon back, then the strike sweeps it through in front of the player —
+// same two-phase shape as every enemy's own attackWindup/attackCooldown.
+const WEAPON_SWING_WINDUP = 0.08;
+const WEAPON_SWING_DURATION = 0.3;
+const WEAPON_SWING_BACK = 0.6; // radians pulled back during windup
+const WEAPON_SWING_FORWARD = 1.1; // radians swept forward during the strike
+
+function computeWeaponSwingAngle(state) {
+  if (state.swingTimeLeft <= 0) return 0;
+  const elapsed = WEAPON_SWING_DURATION - state.swingTimeLeft;
+  if (elapsed < WEAPON_SWING_WINDUP) {
+    return -WEAPON_SWING_BACK * (elapsed / WEAPON_SWING_WINDUP);
+  }
+  const strikeDuration = WEAPON_SWING_DURATION - WEAPON_SWING_WINDUP;
+  const t = Math.min(1, (elapsed - WEAPON_SWING_WINDUP) / strikeDuration);
+  return -WEAPON_SWING_BACK + (WEAPON_SWING_BACK + WEAPON_SWING_FORWARD) * t;
+}
+
+// Per-group rotation angles — idle sway, a walk cycle while a movement key
+// is held, and the weapon swing layered on top of whichever of those is
+// current. `angles.weapon` also picks up a facingY-based tilt so the
+// swing's plane leans toward whichever way the player is actually walking,
+// per the design brief — the rig itself never rotates (like every enemy,
+// it only flips left/right), so this tilt is the stand-in for that.
+function computePlayerAngles(state) {
+  const angles = { head: 0, torso: 0, armL: 0, armR: 0, legL: 0, legR: 0, weapon: 0 };
+
+  if (state.isWalking) {
+    const walk = Math.sin(state.animPhase * 8);
+    angles.legL = walk * 0.55;
+    angles.legR = -walk * 0.55;
+    angles.armL = -walk * 0.35;
+    angles.armR = walk * 0.35;
+    angles.torso = walk * 0.02;
+  } else {
+    const sway = Math.sin(state.animPhase * 1.5);
+    angles.armL = sway * 0.06;
+    angles.armR = -sway * 0.06;
+    angles.head = sway * 0.04;
+  }
+
+  const swing = computeWeaponSwingAngle(state);
+  const tilt = state.facingY * 0.5;
+  if (state.swingTimeLeft > 0) angles.armR = swing * 0.4 + tilt; // arm follows through a little; the weapon does the rest
+  angles.weapon = swing + tilt;
+
+  return angles;
+}
+
+function drawPlayerCharacter(ctx, camera, state) {
+  const rig = ForestAssets.playerRig;
+  const flip = state.facingX < 0 ? -1 : 1;
+  const angles = computePlayerAngles(state);
+
+  const groundWorld = playerLocalToWorld(rig.groundAnchor, state, flip);
+  ctx.beginPath();
+  ctx.ellipse(groundWorld.x - camera.x, groundWorld.y - camera.y, 15, 5.5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+  ctx.fill();
+
+  // Gust Step dash streak (design-doc asset) — trails behind the player
+  // along the direction of travel, fading out over the burst's duration.
+  const dashTimeLeft = state.dashTimeLeft || 0;
+  if (dashTimeLeft > 0) {
+    const t = Math.min(1, dashTimeLeft / DASH_DURATION);
+    const asset = ForestAssets.spellEffects.gustStepStreak;
+    const angle = Math.atan2(state.facingY, state.facingX);
+    ctx.save();
+    ctx.globalAlpha = t;
+    ctx.translate(state.x - camera.x - state.facingX * 10, state.y - camera.y - state.facingY * 10);
+    ctx.rotate(angle);
+    ctx.drawImage(asset.image, -asset.width, -asset.height / 2, asset.width, asset.height);
+    ctx.restore();
+  }
+
+  const drawSeg = (key, pivot, angle) => {
+    const seg = rig.segments[key];
+    if (seg.kind === "ellipse") drawPlayerEllipse(seg.center, seg.rx, seg.ry, pivot, angle, state, flip, camera, seg.fill);
+    else drawPlayerPolygon(seg.points, pivot, angle, state, flip, camera, seg.fill);
+  };
+
+  // Draw order matches the design doc's own layering: legs behind
+  // everything, then left arm, then the weapon (so the right hand can grip
+  // over it), then the right arm/hand, then the torso the arms emerge
+  // from, then the head/hat on top.
+  const legL = rig.groups.legL, legR = rig.groups.legR;
+  for (const key of legL.segments) drawSeg(key, legL.pivot, angles.legL);
+  for (const key of legR.segments) drawSeg(key, legR.pivot, angles.legR);
+
+  const armL = rig.groups.armL;
+  for (const key of armL.segments) drawSeg(key, armL.pivot, angles.armL);
+
+  if (state.hasWeapon) {
+    const weapon = rig.groups.weapon;
+    for (const key of weapon.segments) drawSeg(key, weapon.pivot, angles.weapon);
+
+    const glowWorld = playerLocalToWorld(rotateAround(rig.weaponGlowCenter, weapon.pivot, angles.weapon), state, flip);
+    const gx = glowWorld.x - camera.x, gy = glowWorld.y - camera.y;
+    const glowR = 7 * PLAYER_RIG_SCALE * 4.5;
+    const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, glowR);
+    grad.addColorStop(0, "rgba(200, 235, 235, 0.7)");
+    grad.addColorStop(1, "rgba(200, 235, 235, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(gx, gy, glowR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const armR = rig.groups.armR;
+  for (const key of armR.segments) drawSeg(key, armR.pivot, angles.armR);
+
+  const torso = rig.groups.torso;
+  for (const key of torso.segments) drawSeg(key, torso.pivot, angles.torso);
+
+  const head = rig.groups.head;
+  for (const key of head.segments) drawSeg(key, head.pivot, angles.head);
+}
+
 class Player {
   constructor(x, y) {
     this.x = x;
     this.y = y;
-    this.radius = 14;
     this.facingX = 0;
     this.facingY = 1; // default: facing down
     this.color = "#e0b64a";
     this.dashTimeLeft = 0;
     this.isCasting = false;
+    this.isWalking = false;
     this.maxHealth = 100;
     this.health = 100;
+    this.hasWeapon = false; // granted by the Elder — see NPC_DEFS
+    this.animPhase = 0;
+    this.swingTimeLeft = 0;
   }
 
   takeDamage(amount) {
@@ -1138,6 +1329,11 @@ class Player {
     this.health = Math.min(this.maxHealth, this.health + amount);
   }
 
+  triggerSwing() {
+    if (!this.hasWeapon || this.swingTimeLeft > 0) return;
+    this.swingTimeLeft = WEAPON_SWING_DURATION;
+  }
+
   update(dt) {
     const input = {
       dx: (keys.d ? 1 : 0) - (keys.a ? 1 : 0),
@@ -1145,10 +1341,12 @@ class Player {
       e: keys.shift,
     };
     simulatePlayerMovement(this, input, dt);
+    this.animPhase += dt;
+    if (this.swingTimeLeft > 0) this.swingTimeLeft = Math.max(0, this.swingTimeLeft - dt);
   }
 
   draw(ctx, camera) {
-    drawPlayerLike(ctx, camera, this);
+    drawPlayerCharacter(ctx, camera, this);
   }
 }
 
@@ -2409,18 +2607,28 @@ function createVillageRng(seed) {
   };
 }
 
+// Idempotent — safe even if onComplete somehow ran twice.
+function grantWeapon() {
+  if (player.hasWeapon) return;
+  player.hasWeapon = true;
+  Sound.heal(); // reuse the "gained something" chime — no dedicated one yet
+}
+
 // Linear (non-branching) NPC lines — pressing F advances one line at a
-// time; the last line closes the panel. Positions are offsets from
-// VILLAGE_CENTER. Premise/lore only for now — no mechanics, no spells
-// granted; that comes later as the village grows.
+// time; the last line closes the panel and, the first time through, runs
+// onComplete. Positions are offsets from VILLAGE_CENTER. Lore only for
+// now, plus the weapon — no spells; casting opens up later through other
+// NPCs (see SPELLS_ENABLED).
 const NPC_DEFS = [
   {
     id: "elder", kind: "trainer", name: "Elder", x: -70, y: -40,
     lines: [
       "You're awake. Good — the Sanctuary doesn't see many new faces.",
       "Long ago this whole forest was one and the same. Then something changed, and it split into six wild regions, each stranger than the last.",
-      "You'll find your own way out there eventually. For now, rest by the fire. The Sanctuary's yours to explore.",
+      "Here — take this. Everyone who leaves this clearing carries something. Right arrow swings it, once you've got the feel for standing still long enough to aim.",
+      "Rest by the fire when you need to. The Sanctuary's yours to explore.",
     ],
+    onComplete: () => grantWeapon(),
   },
 ];
 
@@ -3466,10 +3674,11 @@ function loop(now) {
 
   // Spellbook: Q toggles it open/closed (press again to close), at any time,
   // not just while casting — it's a reference sheet, not something gated on
-  // being mid-spell. Ignored while a menu/dialogue is open, same as Tab.
+  // being mid-spell. Ignored while a menu/dialogue is open, same as Tab —
+  // and while SPELLS_ENABLED is false, there's nothing to show yet.
   const qJustPressed = keys.q && !qWasPressed;
   qWasPressed = keys.q;
-  if (qJustPressed && !uiBlocking) spellbookEl.classList.toggle("visible");
+  if (qJustPressed && !uiBlocking && SPELLS_ENABLED) spellbookEl.classList.toggle("visible");
 
   // Player list: held down to show, hidden the instant Tab is released —
   // ignored while a menu/dialogue is open, where Tab reverts to normal
