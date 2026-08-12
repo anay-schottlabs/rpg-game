@@ -202,7 +202,10 @@ const RIVER_WATER_WIDTH = 41;
 const POND_WATER_RADIUS = 130;
 const POND_SAND_RADIUS = 158;
 
-let riverPoints = []; // smoothed polyline the river spine follows
+const RIVER_COUNT = 2;
+const RIVER_MIN_GAP = RIVER_OUTLINE_WIDTH + 120; // clear separation kept between river spines
+
+let rivers = []; // array of smoothed polylines, one per river spine
 let ponds = []; // [{x, y, sandRadius, sandPoints, waterPoints}]
 
 // Same blob-polygon algorithm as the design kit's pond generator: a ring of
@@ -218,16 +221,11 @@ function blobPoints(cx, cy, rx, ry, seed, count = 16) {
   return pts;
 }
 
-// One river spine crossing the interior forest (entering and exiting through
-// the boundary wall, curving well clear of the campfire clearing), with two
-// ponds dropped along its length so it visibly widens into them and out
-// again — the same "stream feeding a pond" composition as the design kit's
-// "Pond & Stream" card, just applied at two points along a longer river.
-function generateWater() {
-  const startAngle = RNG.random() * Math.PI * 2;
-  const endAngle = startAngle + Math.PI + (RNG.random() - 0.5) * 1.2;
+// One river spine crossing the interior forest, entering and exiting through
+// the boundary wall at the given angles and curving well clear of the
+// campfire clearing along the way.
+function generateRiverSpine(startAngle, endAngle) {
   const spineRadius = WALL_START - 100;
-
   const start = {
     x: WORLD_CENTER.x + Math.cos(startAngle) * spineRadius,
     y: WORLD_CENTER.y + Math.sin(startAngle) * spineRadius,
@@ -260,11 +258,64 @@ function generateWater() {
     points.push({ x, y });
   }
   points.push(end);
+  return points;
+}
 
-  riverPoints = points;
+function segmentsIntersect(p1, p2, p3, p4) {
+  const d1x = p2.x - p1.x;
+  const d1y = p2.y - p1.y;
+  const d2x = p4.x - p3.x;
+  const d2y = p4.y - p3.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false; // parallel (or near enough not to matter here)
+  const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / denom;
+  const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / denom;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+// True if `points` crosses or comes within `minGap` of any already-placed
+// river — checked via both segment-segment intersection (hard crossings)
+// and point-to-segment distance (so near-parallel rivers can't run right
+// alongside each other either).
+function riverConflicts(points, existingRivers, minGap) {
+  for (const other of existingRivers) {
+    for (let i = 0; i < points.length - 1; i++) {
+      for (let j = 0; j < other.length - 1; j++) {
+        if (segmentsIntersect(points[i], points[i + 1], other[j], other[j + 1])) return true;
+      }
+    }
+    for (const p of points) {
+      for (let j = 0; j < other.length - 1; j++) {
+        if (distToSegment(p.x, p.y, other[j].x, other[j].y, other[j + 1].x, other[j + 1].y) < minGap) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// A handful of independent river spines (RIVER_COUNT), spread around the
+// compass so they don't all cross the same stretch of forest, each with one
+// pond dropped along its length where it visibly widens — the same "stream
+// feeding a pond" composition as the design kit's "Pond & Stream" card.
+// Candidates that would cross or run alongside an already-placed river are
+// rejected and retried with fresh angles, so rivers never overlap.
+function generateWater() {
+  rivers = [];
   ponds = [];
-  const pondIndices = [Math.floor(points.length * 0.35), Math.floor(points.length * 0.68)];
-  for (const idx of pondIndices) {
+
+  const baseAngle = RNG.random() * Math.PI * 2;
+  for (let i = 0; i < RIVER_COUNT; i++) {
+    let points = null;
+    for (let attempt = 0; attempt < 10 && !points; attempt++) {
+      const startAngle = baseAngle + (i / RIVER_COUNT) * Math.PI * 2 + (RNG.random() - 0.5) * 0.6;
+      const endAngle = startAngle + Math.PI + (RNG.random() - 0.5) * 1.2;
+      const candidate = generateRiverSpine(startAngle, endAngle);
+      if (!riverConflicts(candidate, rivers, RIVER_MIN_GAP)) points = candidate;
+    }
+    if (!points) continue; // couldn't find a clear path after several tries — skip rather than force an overlap
+    rivers.push(points);
+
+    const idx = Math.floor(points.length * (0.3 + RNG.random() * 0.4));
     const p = points[idx];
     const seed = RNG.random() * 100;
     const scale = 0.85 + RNG.random() * 0.3;
@@ -295,10 +346,12 @@ function distToSegment(px, py, x1, y1, x2, y2) {
 // as part of the water feature, so the player is stopped there rather than
 // being able to walk out onto the sand first.
 function isPointInWater(x, y) {
-  for (let i = 0; i < riverPoints.length - 1; i++) {
-    const a = riverPoints[i];
-    const b = riverPoints[i + 1];
-    if (distToSegment(x, y, a.x, a.y, b.x, b.y) < RIVER_BANK_WIDTH / 2) return true;
+  for (const points of rivers) {
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      if (distToSegment(x, y, a.x, a.y, b.x, b.y) < RIVER_BANK_WIDTH / 2) return true;
+    }
   }
   for (const pond of ponds) {
     if (Math.hypot(x - pond.x, y - pond.y) < pond.sandRadius) return true;
@@ -337,14 +390,15 @@ function drawBlob(points, camera, fill) {
 // object loop — trees/decoration near the bank still draw on top of it
 // normally since they're sorted afterward, so no per-segment y-sort needed.
 function drawWater(camera) {
-  if (riverPoints.length > 1) {
-    const screenPoints = riverPoints.map((p) => ({ x: p.x - camera.x, y: p.y - camera.y }));
-    const layers = [
-      { width: RIVER_OUTLINE_WIDTH, color: "#2a1f18" },
-      { width: RIVER_BANK_WIDTH, color: "#c9a877" },
-      { width: RIVER_INNER_WIDTH, color: "#2a1f18" },
-      { width: RIVER_WATER_WIDTH, color: "#4a7a7a" },
-    ];
+  const layers = [
+    { width: RIVER_OUTLINE_WIDTH, color: "#2a1f18" },
+    { width: RIVER_BANK_WIDTH, color: "#c9a877" },
+    { width: RIVER_INNER_WIDTH, color: "#2a1f18" },
+    { width: RIVER_WATER_WIDTH, color: "#4a7a7a" },
+  ];
+  for (const points of rivers) {
+    if (points.length < 2) continue;
+    const screenPoints = points.map((p) => ({ x: p.x - camera.x, y: p.y - camera.y }));
     for (const layer of layers) {
       ctx.beginPath();
       drawSmoothPath(ctx, screenPoints);
