@@ -382,5 +382,165 @@ const ForestAssets = (() => {
     ambient[key] = { image: svgToImage(svg), width: ambientMeta[key].width, height: ambientMeta[key].height, groundFraction: ambientMeta[key].groundFraction };
   }
 
-  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient };
+  // --- Spell effects ---------------------------------------------------
+
+  const spellSvgs = {
+    fireBolt: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="80" viewBox="0 0 140 80">
+        <path d="M10,50 Q45,52 72,42" stroke="#e8a24a" stroke-width="10" fill="none" opacity="0.25" stroke-linecap="round"/>
+        <path d="M25,50 Q55,50 78,42" stroke="#e8a24a" stroke-width="6" fill="none" opacity="0.4" stroke-linecap="round"/>
+        <path d="M78,28 Q90,38 84,46 Q94,44 92,54 Q88,62 80,60 Q68,56 68,46 Q68,38 78,28 Z" fill="#c9622f" stroke="#f0e6d2" stroke-width="2.5"/>
+      </svg>`,
+
+    fireImpact: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="110" height="110" viewBox="0 0 110 110">
+        <defs>
+          <radialGradient id="impactFireGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#e8a24a" stop-opacity="0.6"/>
+            <stop offset="1" stop-color="#e8a24a" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="55" cy="55" r="42" fill="url(#impactFireGlow)"/>
+        <polygon points="55,10 64,42 92,30 68,54 84,84 55,64 26,84 42,54 18,30 46,42" fill="#c9622f" stroke="#f0e6d2" stroke-width="2.5"/>
+        <circle cx="55" cy="55" r="12" fill="#e8b13f" stroke="#f0e6d2" stroke-width="2"/>
+      </svg>`,
+
+    earthWallPillar: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="120" height="160" viewBox="0 0 120 160">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <ellipse cx="60" cy="153" rx="34" ry="8" fill="#2a1f18" opacity="0.22"/>
+        <polygon points="40,150 26,100 36,58 60,20 84,52 94,102 82,150" fill="#8a8478" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="60,20 84,52 94,102 82,150 66,150 66,64" fill="url(#deepHatch)" opacity="0.4"/>
+        <ellipse cx="46" cy="60" rx="11" ry="7" fill="#5c6b3f" stroke="#2a1f18" stroke-width="1.5"/>
+        <ellipse cx="76" cy="110" rx="9" ry="6" fill="#5c6b3f" stroke="#2a1f18" stroke-width="1.5"/>
+      </svg>`,
+
+    earthWallBarricade: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="220" height="110" viewBox="0 0 220 110">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <polygon points="15,90 45,60 90,68 130,50 170,64 205,48 205,92 15,100" fill="#7a756a" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="15,90 205,92 205,100 15,100" fill="url(#deepHatch)" opacity="0.35"/>
+        <ellipse cx="100" cy="62" rx="10" ry="6" fill="#5c6b3f" stroke="#2a1f18" stroke-width="1.5"/>
+        <ellipse cx="182" cy="58" rx="8" ry="5" fill="#5c6b3f" stroke="#2a1f18" stroke-width="1.5"/>
+      </svg>`,
+
+    iceBridgeSegment: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="220" height="100" viewBox="0 0 220 100">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <polygon points="20,70 205,66 205,82 20,86" fill="#5f95a8" stroke="#2a1f18" stroke-width="3"/>
+        <polygon points="20,70 205,66 205,82 20,86" fill="url(#deepHatch)" opacity="0.3"/>
+        <polygon points="10,40 30,30 190,28 210,42 205,66 20,70" fill="#bcdfe8" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <path d="M50,36 Q90,30 130,33 Q150,35 140,44 Q100,47 60,45 Q40,43 50,36 Z" fill="#eef8fa" opacity="0.5"/>
+      </svg>`,
+  };
+
+  const spellMeta = {
+    fireBolt: { width: 66, height: 38, groundFraction: 0.5 }, // anchored at its own center — it's airborne, not ground-planted
+    fireImpact: { width: 80, height: 80, groundFraction: 0.5 },
+    earthWallPillar: { width: 95, height: 127, groundFraction: 150 / 160 },
+    earthWallBarricade: { width: 190, height: 95, groundFraction: 92 / 110 },
+    iceBridgeSegment: { width: 150, height: 68, groundFraction: 76 / 100 },
+  };
+
+  const spellEffects = {};
+  for (const [key, svg] of Object.entries(spellSvgs)) {
+    spellEffects[key] = { image: svgToImage(svg), width: spellMeta[key].width, height: spellMeta[key].height, groundFraction: spellMeta[key].groundFraction };
+  }
+
+  // --- Golem rig -------------------------------------------------------
+
+  // Same rockPoints() generator as trees/rocks, applied to a full segmented
+  // body (design kit's "Enemy — Rock Golem"). Points are kept as plain
+  // {x,y} arrays rather than rasterized images because game.js needs to
+  // rotate individual segments around their joints for animation.
+  function rockPointList(cx, cy, rx, ry, amp, seed, count = 10) {
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      const r = 1 + amp * Math.sin(angle * 3 + seed);
+      pts.push({ x: cx + rx * r * Math.cos(angle), y: cy + ry * r * Math.sin(angle) });
+    }
+    return pts;
+  }
+
+  const golemRig = {
+    // Local coordinate space matches the design's 260x340 viewBox exactly.
+    segments: {
+      head: { points: rockPointList(130, 60, 26, 22, 0.22, 21), fill: "#8a8478" },
+      torsoMain: { points: rockPointList(130, 150, 58, 55, 0.16, 22), fill: "#8a8478" },
+      torsoSecondary: { points: rockPointList(95, 178, 28, 26, 0.2, 23), fill: "#8a8478" },
+      armLUpper: { points: rockPointList(45, 150, 22, 26, 0.24, 24), fill: "#8a8478" },
+      armLLower: { points: rockPointList(35, 205, 18, 22, 0.26, 25), fill: "#8a8478" },
+      armRUpper: { points: rockPointList(215, 150, 22, 26, 0.24, 26), fill: "#8a8478" },
+      armRLower: { points: rockPointList(225, 205, 18, 22, 0.26, 27), fill: "#8a8478" },
+      legL: { points: rockPointList(105, 262, 26, 30, 0.2, 28), fill: "#7a756a" },
+      legR: { points: rockPointList(155, 262, 26, 30, 0.2, 29), fill: "#7a756a" },
+      footL: { points: rockPointList(102, 302, 22, 14, 0.22, 30), fill: "#5f5a4f" },
+      footR: { points: rockPointList(158, 302, 22, 14, 0.22, 31), fill: "#5f5a4f" },
+    },
+    // Rigid groups that rotate together around one joint each, matching the
+    // single pivot the design marks per limb (shoulder for the whole arm,
+    // hip for the whole leg) rather than a separate elbow/knee joint.
+    groups: {
+      head: { segments: ["head"], pivot: { x: 130, y: 82 } },
+      armL: { segments: ["armLUpper", "armLLower"], pivot: { x: 45, y: 150 } },
+      armR: { segments: ["armRUpper", "armRLower"], pivot: { x: 215, y: 150 } },
+      legL: { segments: ["legL", "footL"], pivot: { x: 105, y: 240 } },
+      legR: { segments: ["legR", "footR"], pivot: { x: 155, y: 240 } },
+      torso: { segments: ["torsoMain", "torsoSecondary"], pivot: { x: 130, y: 150 } },
+    },
+    // Fixed (non-animated) joint sockets and moss patches, drawn once
+    // beneath/around the moving segments.
+    sockets: [
+      { x: 66, y: 150, rx: 16, ry: 14 },
+      { x: 194, y: 150, rx: 16, ry: 14 },
+      { x: 40, y: 180, rx: 13, ry: 12 },
+      { x: 220, y: 180, rx: 13, ry: 12 },
+      { x: 97, y: 228, rx: 18, ry: 14 },
+      { x: 163, y: 228, rx: 18, ry: 14 },
+      { x: 104, y: 292, rx: 13, ry: 10 },
+      { x: 156, y: 292, rx: 13, ry: 10 },
+    ],
+    moss: [
+      { x: 90, y: 160, rx: 13, ry: 9 },
+      { x: 165, y: 130, rx: 10, ry: 7 },
+      { x: 120, y: 195, rx: 9, ry: 6 },
+      { x: 42, y: 195, rx: 8, ry: 6 },
+      { x: 112, y: 255, rx: 9, ry: 6 },
+      { x: 168, y: 270, rx: 8, ry: 6 },
+      { x: 132, y: 50, rx: 6, ry: 4 },
+      { x: 112, y: 72, rx: 7, ry: 5 },
+    ],
+    cracks: [
+      "M110,110 L124,150 L108,180 L128,210",
+      "M150,105 L145,140 L165,165",
+      "M118,50 L124,62 L116,72",
+    ],
+    eyes: [
+      { x: 120, y: 58, r: 5 },
+      { x: 142, y: 58, r: 5 },
+    ],
+    // Local point every segment/pivot is relative to, and the local space's
+    // total height — used to map into world coordinates and to pick a
+    // display scale.
+    groundAnchor: { x: 130, y: 316 },
+    viewHeight: 340,
+  };
+
+  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig };
 })();
