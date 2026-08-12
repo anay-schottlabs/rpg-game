@@ -216,7 +216,7 @@ const POND_WATER_RADIUS = 130;
 const POND_SAND_RADIUS = 158;
 
 let riverPoints = []; // smoothed polyline the river spine follows
-let ponds = []; // [{x, y, waterRadius, sandPoints, waterPoints}]
+let ponds = []; // [{x, y, sandRadius, sandPoints, waterPoints}]
 
 // Same blob-polygon algorithm as the design kit's pond generator: a ring of
 // points perturbed by two sine waves keyed on `seed`, giving an irregular
@@ -284,7 +284,7 @@ function generateWater() {
     ponds.push({
       x: p.x,
       y: p.y,
-      waterRadius: POND_WATER_RADIUS * scale,
+      sandRadius: POND_SAND_RADIUS * scale,
       sandPoints: blobPoints(p.x, p.y, POND_SAND_RADIUS * scale, POND_SAND_RADIUS * scale * 0.82, seed),
       waterPoints: blobPoints(p.x, p.y, POND_WATER_RADIUS * scale, POND_WATER_RADIUS * scale * 0.82, seed + 5),
     });
@@ -303,14 +303,18 @@ function distToSegment(px, py, x1, y1, x2, y2) {
 // The only collision check in the game — shared by world generation (so
 // nothing spawns in the river/ponds) and player movement (so nothing can
 // walk into them either). See simulatePlayerMovement below.
+//
+// Blocks at the sand/bank edge, not just the blue water — the beach reads
+// as part of the water feature, so the player is stopped there rather than
+// being able to walk out onto the sand first.
 function isPointInWater(x, y) {
   for (let i = 0; i < riverPoints.length - 1; i++) {
     const a = riverPoints[i];
     const b = riverPoints[i + 1];
-    if (distToSegment(x, y, a.x, a.y, b.x, b.y) < RIVER_WATER_WIDTH / 2) return true;
+    if (distToSegment(x, y, a.x, a.y, b.x, b.y) < RIVER_BANK_WIDTH / 2) return true;
   }
   for (const pond of ponds) {
-    if (Math.hypot(x - pond.x, y - pond.y) < pond.waterRadius) return true;
+    if (Math.hypot(x - pond.x, y - pond.y) < pond.sandRadius) return true;
   }
   return false;
 }
