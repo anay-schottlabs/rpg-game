@@ -21,33 +21,16 @@
     </svg>
 
     <!-- Casting ring — shown while E is held. Arrow presses build a combo;
-         each pip lights up (colored by the closest-matching spell's
-         element) once its direction has been entered. -->
+         only the most recently pressed direction's pip lights up. -->
     <svg id="casting-ring" width="280" height="280" viewBox="0 0 280 280">
       <defs>
         <radialGradient id="castGlowNeutral" cx="0.5" cy="0.5" r="0.5">
           <stop offset="0" stop-color="#f4c94a" stop-opacity="0.55"/>
           <stop offset="1" stop-color="#f4c94a" stop-opacity="0"/>
         </radialGradient>
-        <radialGradient id="castGlowFire" cx="0.5" cy="0.55" r="0.5">
-          <stop offset="0" stop-color="#e8a24a" stop-opacity="0.6"/>
-          <stop offset="1" stop-color="#e8a24a" stop-opacity="0"/>
-        </radialGradient>
-        <radialGradient id="castGlowEarth" cx="0.5" cy="0.55" r="0.5">
-          <stop offset="0" stop-color="#a68b5c" stop-opacity="0.55"/>
-          <stop offset="1" stop-color="#a68b5c" stop-opacity="0"/>
-        </radialGradient>
-        <radialGradient id="castGlowWind" cx="0.5" cy="0.55" r="0.5">
-          <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
-          <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
-        </radialGradient>
-        <radialGradient id="castGlowWater" cx="0.5" cy="0.55" r="0.5">
-          <stop offset="0" stop-color="#5fa0b0" stop-opacity="0.55"/>
-          <stop offset="1" stop-color="#5fa0b0" stop-opacity="0"/>
-        </radialGradient>
       </defs>
 
-      <circle id="casting-glow" cx="140" cy="140" r="90" fill="url(#castGlowNeutral)"/>
+      <circle cx="140" cy="140" r="90" fill="url(#castGlowNeutral)"/>
       <circle cx="140" cy="140" r="46" fill="none" stroke="#2a1f18" stroke-width="3" stroke-dasharray="6 6" opacity="0.7"/>
 
       <g id="cast-pip-up">
@@ -139,7 +122,7 @@
     <div id="host-disconnected" class="hidden">Host disconnected — session ended.</div>
 
     <!-- Player list — toggled by tapping Tab (press again to close). -->
-    <div id="player-list">
+    <div id="player-list" class="visible">
       <div class="player-list-title">Players</div>
       <div id="player-list-items"></div>
     </div>

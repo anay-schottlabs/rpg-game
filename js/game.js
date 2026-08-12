@@ -10,7 +10,6 @@ const playerListItemsEl = document.getElementById("player-list-items");
 const healthBarFillEl = document.getElementById("health-bar-fill");
 const healthBarSheenEl = document.getElementById("health-bar-sheen");
 const castingRingEl = document.getElementById("casting-ring");
-const castingGlowEl = document.getElementById("casting-glow");
 const castPipEls = {
   up: document.getElementById("cast-pip-up"),
   right: document.getElementById("cast-pip-right"),
@@ -84,16 +83,11 @@ const SPELLS = [
   { name: "Rockfall", element: "earth", combo: ["down", "down", "right", "up"] },
 ];
 
-const ELEMENT_PIP_COLORS = { earth: "#a68b5c", wind: "#bfe3e3", fire: "#c9622f", water: "#5fa0b0" };
 const ARROW_KEY_TO_DIR = { arrowup: "up", arrowdown: "down", arrowleft: "left", arrowright: "right" };
 const PIP_DIM_COLOR = "#8a7a68";
+const PIP_LIT_COLOR = "#f4c94a";
 
 let castSequence = [];
-
-function matchingSpells(sequence) {
-  if (sequence.length === 0) return SPELLS;
-  return SPELLS.filter((s) => sequence.every((dir, i) => s.combo[i] === dir));
-}
 
 function startCasting() {
   castSequence = [];
@@ -110,23 +104,16 @@ function stopCasting() {
   castSequence = [];
 }
 
-// Lights up each pip whose direction has appeared anywhere in the sequence
-// so far, colored by whichever spell(s) are still a possible match (dim/
-// neutral gold when the input no longer matches any known combo).
+// Only the most recently pressed direction is lit, in a single fixed color
+// — a simple "last input registered" cue rather than a running tally.
 function updateCastingRing() {
-  const candidates = matchingSpells(castSequence);
-  const singleElement = candidates.length > 0 && candidates.every((s) => s.element === candidates[0].element) ? candidates[0].element : null;
-  const litColor = singleElement ? ELEMENT_PIP_COLORS[singleElement] : "#f4c94a";
-  const pressedDirs = new Set(castSequence);
-
+  const lastDir = castSequence[castSequence.length - 1];
   for (const dir of Object.keys(castPipEls)) {
     const pip = castPipEls[dir];
-    const isLit = pressedDirs.has(dir);
-    pip.querySelector("circle").setAttribute("fill", isLit ? litColor : PIP_DIM_COLOR);
+    const isLit = dir === lastDir;
+    pip.querySelector("circle").setAttribute("fill", isLit ? PIP_LIT_COLOR : PIP_DIM_COLOR);
     pip.setAttribute("opacity", isLit ? "1" : "0.35");
   }
-
-  castingGlowEl.setAttribute("fill", `url(#castGlow${singleElement ? singleElement[0].toUpperCase() + singleElement.slice(1) : "Neutral"})`);
 }
 
 function flashSigil(element) {
