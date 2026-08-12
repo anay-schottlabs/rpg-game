@@ -933,7 +933,597 @@ const ForestAssets = (() => {
     viewHeight: 200,
   };
 
-  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig };
+  // Crystal Golem (Boss Arenas) — same fused-part rig shape as the regular
+  // golem (reuses drawGolemEnemy's renderer in game.js unmodified), scaled
+  // up with a bigger local coordinate space, a purple crystal palette, and
+  // extra fixed decorations (shoulder/head shard clusters, a glowing chest
+  // core) the plain golemRig doesn't have.
+  const crystalGolemRig = {
+    segments: {
+      head: { points: rockPointList(150, 55, 32, 27, 0.16, 301), fill: "#5a4a8a" },
+      torsoMain: { points: rockPointList(150, 175, 72, 66, 0.14, 302), fill: "#5a4a8a" },
+      torsoSecondary: { points: rockPointList(103, 205, 34, 32, 0.18, 303), fill: "#5a4a8a" },
+      armLUpper: { points: rockPointList(52, 172, 27, 32, 0.2, 304), fill: "#5a4a8a" },
+      armLLower: { points: rockPointList(38, 240, 21, 27, 0.22, 305), fill: "#5a4a8a" },
+      armRUpper: { points: rockPointList(248, 172, 27, 32, 0.2, 306), fill: "#5a4a8a" },
+      armRLower: { points: rockPointList(262, 240, 21, 27, 0.22, 307), fill: "#5a4a8a" },
+      legL: { points: rockPointList(118, 302, 32, 36, 0.16, 308), fill: "#4a3a6a" },
+      legR: { points: rockPointList(182, 302, 32, 36, 0.16, 309), fill: "#4a3a6a" },
+      footL: { points: rockPointList(114, 348, 28, 17, 0.18, 310), fill: "#3a2c5a" },
+      footR: { points: rockPointList(186, 348, 28, 17, 0.18, 311), fill: "#3a2c5a" },
+    },
+    // Pivots follow the same hand-tuned pattern as the regular golem: arm
+    // pivots sit right at the upper-arm segment's own center (shoulder
+    // attaches there), while head/leg pivots sit partway from their
+    // segment's center toward the torso's center (roughly a quarter of the
+    // way for the head, a fifth for the legs).
+    groups: {
+      head: { segments: ["head"], pivot: { x: 150, y: 84 } },
+      torso: { segments: ["torsoMain", "torsoSecondary"], pivot: { x: 150, y: 175 } },
+      armL: { segments: ["armLUpper", "armLLower"], pivot: { x: 52, y: 172 } },
+      armR: { segments: ["armRUpper", "armRLower"], pivot: { x: 248, y: 172 } },
+      legL: { segments: ["legL", "footL"], pivot: { x: 118, y: 277 } },
+      legR: { segments: ["legR", "footR"], pivot: { x: 182, y: 277 } },
+    },
+    // Fixed (non-animated) decorations, drawn with the torso.
+    crystalShards: [
+      { points: [{ x: 60, y: 120 }, { x: 40, y: 80 }, { x: 68, y: 100 }] },
+      { points: [{ x: 240, y: 120 }, { x: 260, y: 80 }, { x: 232, y: 100 }] },
+      { points: [{ x: 115, y: 95 }, { x: 108, y: 55 }, { x: 128, y: 88 }] },
+      { points: [{ x: 185, y: 95 }, { x: 192, y: 55 }, { x: 172, y: 88 }] },
+    ],
+    // Exposed weak-point core, drawn over the torso.
+    core: { x: 150, y: 180, r: 26, diamond: [{ x: 140, y: 158 }, { x: 160, y: 158 }, { x: 168, y: 180 }, { x: 150, y: 202 }, { x: 132, y: 180 }] },
+    headGem: [{ x: 150, y: 28 }, { x: 158, y: 42 }, { x: 150, y: 56 }, { x: 142, y: 42 }],
+    eyes: [{ x: 138, y: 52, r: 5 }, { x: 162, y: 52, r: 5 }],
+    groundAnchor: { x: 150, y: 368 },
+    viewHeight: 380,
+  };
 
-  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, biomeTrees, biomeFoliage, enemyRigs };
+  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig, crystalGolem: crystalGolemRig };
+
+  // --- Spawn Hub: NPCs -----------------------------------------------------
+
+  // Villagers/NPCs are static ground sprites (like trees/foliage) rather
+  // than rigged skeletons — they idle in place or (for the two duel
+  // combatants) lunge as a single scaled/translated sprite rather than
+  // animating individual limbs. Every humanoid shares the same rough
+  // proportions (140x200 viewBox, ground at y=192) so callers can treat
+  // them uniformly.
+  const npcSvgs = {
+    trainer: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="200" viewBox="0 0 140 200">
+        <ellipse cx="70" cy="192" rx="32" ry="8" fill="#2a1f18" opacity="0.2"/>
+        <path d="M48,98 Q70,88 92,98 L104,182 Q70,194 36,182 Z" fill="#6b5a8a" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M48,98 Q70,88 92,98 L104,182 Q70,194 36,182 Z" fill="url(#deepHatch)" opacity="0.25"/>
+        <circle cx="70" cy="68" r="22" fill="#e8c9a0" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M48,60 Q70,36 92,60 Q92,48 70,42 Q48,48 48,60 Z" fill="#5a4a72" stroke="#2a1f18" stroke-width="2.5"/>
+        <line x1="100" y1="132" x2="118" y2="66" stroke="#5a4530" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="118" cy="58" r="9" fill="url(#glow)"/>
+        <g transform="translate(70,18)">
+          <circle r="12" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2"/>
+          <rect x="-7" y="-6" width="14" height="10" fill="none" stroke="#2a1f18" stroke-width="1.3"/>
+          <line x1="0" y1="-6" x2="0" y2="4" stroke="#2a1f18" stroke-width="1"/>
+        </g>
+      </svg>`,
+
+    rangeMaster: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="200" viewBox="0 0 140 200">
+        <ellipse cx="70" cy="192" rx="32" ry="8" fill="#2a1f18" opacity="0.2"/>
+        <path d="M48,98 Q70,88 92,98 L104,182 Q70,194 36,182 Z" fill="#5c6b3f" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M48,98 Q70,88 92,98 L104,182 Q70,194 36,182 Z" fill="url(#deepHatch)" opacity="0.25"/>
+        <circle cx="70" cy="68" r="22" fill="#e8c9a0" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M50,58 Q70,44 90,58 Q88,48 70,46 Q52,48 50,58 Z" fill="#6b5238" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M100,110 Q114,132 100,154" stroke="#5a4530" stroke-width="3" fill="none"/>
+        <line x1="100" y1="110" x2="100" y2="154" stroke="#e8dcc0" stroke-width="1"/>
+        <g transform="translate(70,18)">
+          <circle r="12" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2"/>
+          <circle r="7" fill="none" stroke="#a63d3d" stroke-width="1.6"/>
+          <circle r="2.5" fill="#a63d3d"/>
+        </g>
+      </svg>`,
+
+    bondsKeeper: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="200" viewBox="0 0 140 200">
+        <ellipse cx="70" cy="192" rx="32" ry="8" fill="#2a1f18" opacity="0.2"/>
+        <path d="M48,98 Q70,88 92,98 L104,182 Q70,194 36,182 Z" fill="#c9a24a" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M48,98 Q70,88 92,98 L104,182 Q70,194 36,182 Z" fill="url(#deepHatch)" opacity="0.25"/>
+        <circle cx="70" cy="68" r="22" fill="#e8c9a0" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M50,58 Q70,42 90,58 Q88,46 70,44 Q52,46 50,58 Z" fill="#8a6a48" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="96" y="118" width="10" height="34" rx="3" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="98" y1="124" x2="104" y2="124" stroke="#2a1f18" stroke-width="1"/>
+        <line x1="98" y1="132" x2="104" y2="132" stroke="#2a1f18" stroke-width="1"/>
+        <g transform="translate(70,18)">
+          <circle r="12" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2"/>
+          <circle cx="-4" cy="0" r="6" fill="none" stroke="#4a6a8a" stroke-width="1.6"/>
+          <circle cx="4" cy="0" r="6" fill="none" stroke="#4a6a8a" stroke-width="1.6"/>
+        </g>
+      </svg>`,
+
+    merchant: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="200" viewBox="0 0 160 200">
+        <ellipse cx="75" cy="192" rx="34" ry="8" fill="#2a1f18" opacity="0.2"/>
+        <rect x="30" y="150" width="90" height="8" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <rect x="35" y="158" width="6" height="20" fill="#5a4530" stroke="#2a1f18" stroke-width="1.5"/>
+        <rect x="105" y="158" width="6" height="20" fill="#5a4530" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="55" cy="146" r="6" fill="#8a6a48" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="75" cy="144" r="7" fill="#c9622f" stroke="#2a1f18" stroke-width="1.5"/>
+        <rect x="90" y="138" width="14" height="12" fill="#e8dcc0" stroke="#2a1f18" stroke-width="1.5"/>
+        <path d="M50,90 Q70,80 90,90 L98,170 Q70,180 42,170 Z" fill="#a9642f" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M48,110 Q38,120 42,132" stroke="#a9642f" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <path d="M92,100 Q108,90 106,72" stroke="#a9642f" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <circle cx="106" cy="70" r="6" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="70" cy="62" r="20" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M50,54 Q70,38 90,54 Q88,44 70,42 Q52,44 50,54 Z" fill="#6b5238" stroke="#2a1f18" stroke-width="2"/>
+      </svg>`,
+
+    guard: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="200" viewBox="0 0 140 200">
+        <ellipse cx="70" cy="192" rx="30" ry="8" fill="#2a1f18" opacity="0.2"/>
+        <path d="M50,95 Q70,86 90,95 L96,175 Q70,186 44,175 Z" fill="#6b7a8a" stroke="#2a1f18" stroke-width="3.5"/>
+        <rect x="58" y="130" width="24" height="10" fill="#4a5a68" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="70" cy="62" r="20" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M52,56 Q70,42 88,56 Q86,46 70,44 Q54,46 52,56 Z" fill="#3a2c1e" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="102" y1="180" x2="112" y2="30" stroke="#5a4530" stroke-width="4" stroke-linecap="round"/>
+        <polygon points="112,30 106,44 118,44" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/>
+      </svg>`,
+
+    fisher: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="180" height="160" viewBox="0 0 180 160">
+        <ellipse cx="55" cy="146" rx="26" ry="7" fill="#2a1f18" opacity="0.18"/>
+        <polygon points="40,140 30,110 55,95 75,105 72,135 55,145" fill="#8a8478" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M40,110 Q60,100 78,110 L74,70 Q60,62 46,70 Z" fill="#5c6b3f" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="60" cy="60" r="16" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.2"/>
+        <ellipse cx="60" cy="50" rx="20" ry="6" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <ellipse cx="60" cy="46" rx="10" ry="8" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="76" y1="90" x2="130" y2="60" stroke="#5a4530" stroke-width="3" stroke-linecap="round"/>
+        <line x1="130" y1="60" x2="150" y2="120" stroke="#2a1f18" stroke-width="1"/>
+        <ellipse cx="150" cy="135" rx="28" ry="10" fill="#4a7a7a" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M138,132 Q150,126 162,132" stroke="#7fa8a8" stroke-width="1.6" fill="none" opacity="0.6"/>
+      </svg>`,
+
+    reader: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="150" viewBox="0 0 140 150">
+        <ellipse cx="70" cy="140" rx="38" ry="7" fill="#2a1f18" opacity="0.18"/>
+        <path d="M35,120 Q70,105 105,120 Q100,135 70,138 Q40,135 35,120 Z" fill="#8a6bb0" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M48,95 Q70,86 92,95 L88,120 Q70,126 52,120 Z" fill="#8a6bb0" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="70" cy="75" r="18" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.4"/>
+        <path d="M52,68 Q70,54 88,68 Q86,58 70,56 Q54,58 52,68 Z" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M50,108 L70,100 L90,108 L90,118 L70,110 L50,118 Z" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="58" y1="108" x2="66" y2="105" stroke="#2a1f18" stroke-width="1"/>
+        <line x1="74" y1="105" x2="82" y2="108" stroke="#2a1f18" stroke-width="1"/>
+      </svg>`,
+
+    seatedVillager: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <ellipse cx="70" cy="152" rx="34" ry="7" fill="#2a1f18" opacity="0.18"/>
+        <rect x="45" y="95" width="50" height="35" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="70" cy="95" rx="25" ry="12" fill="#8a6a48" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M50,95 Q70,86 90,95 L84,50 Q70,42 56,50 Z" fill="#7a8bb0" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M50,70 Q40,80 46,92" stroke="#7a8bb0" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <path d="M90,70 Q100,80 94,92" stroke="#7a8bb0" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <circle cx="70" cy="38" r="18" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M54,32 Q70,18 86,32 Q84,24 70,22 Q56,24 54,32 Z" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+      </svg>`,
+
+    villagersChatting: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="260" height="170" viewBox="0 0 260 170">
+        <ellipse cx="70" cy="162" rx="34" ry="7" fill="#2a1f18" opacity="0.18"/>
+        <ellipse cx="190" cy="162" rx="34" ry="7" fill="#2a1f18" opacity="0.18"/>
+        <rect x="45" y="105" width="50" height="35" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="70" cy="105" rx="25" ry="12" fill="#8a6a48" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M50,105 Q70,96 90,105 L84,60 Q70,52 56,60 Z" fill="#c9a24a" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M90,80 Q102,88 98,98" stroke="#c9a24a" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <circle cx="70" cy="48" r="18" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M54,42 Q70,30 86,42 Q84,34 70,32 Q56,34 54,42 Z" fill="#6b5238" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="165" y="105" width="50" height="35" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="190" cy="105" rx="25" ry="12" fill="#8a6a48" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M170,105 Q190,96 210,105 L204,60 Q190,52 176,60 Z" fill="#6b5a8a" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M170,80 Q158,88 162,98" stroke="#6b5a8a" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <circle cx="190" cy="48" r="18" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M174,42 Q190,26 206,42 Q204,32 190,30 Q176,32 174,42 Z" fill="#3a2c1e" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M96,25 Q96,10 111,10 L149,10 Q164,10 164,25 L164,42 Q164,57 149,57 L124,57 L112,70 L115,57 L111,57 Q96,57 96,42 Z" fill="#e8dcc0" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="118" cy="33" r="4" fill="#2a1f18"/>
+        <circle cx="130" cy="33" r="4" fill="#2a1f18"/>
+        <circle cx="142" cy="33" r="4" fill="#2a1f18"/>
+      </svg>`,
+
+    chiefGreeting: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="220" viewBox="0 0 160 220">
+        <ellipse cx="80" cy="208" rx="34" ry="8" fill="#2a1f18" opacity="0.2"/>
+        <path d="M40,100 Q80,90 120,100 L128,190 Q80,204 32,190 Z" fill="#3a1f1f" stroke="#2a1f18" stroke-width="3.5" opacity="0.9"/>
+        <path d="M48,98 Q80,88 112,98 L118,188 Q80,200 42,188 Z" fill="#a63d3d" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M48,98 Q80,88 112,98" stroke="#d4a53d" stroke-width="3" fill="none"/>
+        <rect x="60" y="140" width="40" height="10" fill="#d4a53d" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M48,110 Q38,122 44,136" stroke="#a63d3d" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <path d="M112,110 Q128,98 126,80" stroke="#a63d3d" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle cx="126" cy="78" r="7" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="80" cy="68" r="22" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M60,78 Q80,96 100,78 Q98,68 80,66 Q62,68 60,78 Z" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M58,58 Q80,48 102,58" stroke="#d4a53d" stroke-width="4" fill="none"/>
+        <circle cx="80" cy="52" r="4" fill="#8fe0ff" stroke="#2a1f18" stroke-width="1.2"/>
+      </svg>`,
+
+    chiefBattle: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="200" height="220" viewBox="0 0 200 220">
+        <ellipse cx="100" cy="208" rx="70" ry="9" fill="#2a1f18" opacity="0.2"/>
+        <path d="M30,110 Q100,90 170,110 L178,195 Q100,210 22,195 Z" fill="#3a1f1f" stroke="#2a1f18" stroke-width="3.5" opacity="0.9"/>
+        <path d="M55,105 Q100,92 145,105 L150,195 Q100,205 50,195 Z" fill="#a63d3d" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M55,105 Q100,92 145,105" stroke="#d4a53d" stroke-width="3" fill="none"/>
+        <path d="M55,120 Q40,132 48,148" stroke="#a63d3d" stroke-width="9" fill="none" stroke-linecap="round"/>
+        <path d="M145,120 Q150,140 150,180" stroke="#a63d3d" stroke-width="9" fill="none" stroke-linecap="round"/>
+        <circle cx="170" cy="58" r="20" fill="url(#fireGlow)" opacity="0.5"/>
+        <line x1="150" y1="180" x2="165" y2="70" stroke="#5a4530" stroke-width="6" stroke-linecap="round"/>
+        <rect x="150" y="45" width="40" height="26" rx="4" fill="#7a756a" stroke="#2a1f18" stroke-width="3" transform="rotate(20 170 58)"/>
+        <circle cx="100" cy="70" r="22" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M80,80 Q100,98 120,80 Q118,70 100,68 Q82,70 80,80 Z" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M78,60 Q100,50 122,60" stroke="#d4a53d" stroke-width="4" fill="none"/>
+        <circle cx="100" cy="54" r="4" fill="#8fe0ff" stroke="#2a1f18" stroke-width="1.2"/>
+      </svg>`,
+
+    // Sparring Pair — the second duel combatant, a color variant of the
+    // "blue" fighter from the design doc's Training Battles illustration
+    // (the Chief himself, in chiefBattle above, stands in for the "red"
+    // fighter in-engine).
+    sparringPartner: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="200" viewBox="42,50 116,150">
+        <ellipse cx="80" cy="180" rx="34" ry="7" fill="#2a1f18" opacity="0.15"/>
+        <path d="M58,95 Q80,86 100,95 L94,175 Q80,184 64,175 Z" fill="#4a6a8a" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M48,110 Q40,122 46,134" stroke="#4a6a8a" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <path d="M96,100 Q112,90 118,70" stroke="#4a6a8a" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <circle cx="80" cy="68" r="20" fill="#e8c9a0" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M60,60 Q80,46 100,60 Q98,50 80,48 Q62,50 60,60 Z" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+      </svg>`,
+  };
+
+  const npcMeta = {
+    trainer: { width: 92, height: 131, groundFraction: 192 / 200 },
+    rangeMaster: { width: 92, height: 131, groundFraction: 192 / 200 },
+    bondsKeeper: { width: 92, height: 131, groundFraction: 192 / 200 },
+    merchant: { width: 100, height: 125, groundFraction: 192 / 200 },
+    guard: { width: 88, height: 126, groundFraction: 192 / 200 },
+    fisher: { width: 110, height: 98, groundFraction: 146 / 160 },
+    reader: { width: 92, height: 99, groundFraction: 140 / 150 },
+    seatedVillager: { width: 88, height: 100, groundFraction: 152 / 160 },
+    villagersChatting: { width: 190, height: 124, groundFraction: 162 / 170 },
+    chiefGreeting: { width: 100, height: 138, groundFraction: 208 / 220 },
+    chiefBattle: { width: 122, height: 134, groundFraction: 208 / 220 },
+    sparringPartner: { width: 92, height: 131, groundFraction: 180 / 200 },
+  };
+
+  const npcs = {};
+  for (const [key, svg] of Object.entries(npcSvgs)) {
+    npcs[key] = { image: svgToImage(svg), width: npcMeta[key].width, height: npcMeta[key].height, groundFraction: npcMeta[key].groundFraction };
+  }
+
+  // --- Spawn Hub: practice range, hub features, buildings, arena -----------
+
+  const hubFeatureSvgs = {
+    targetDummy: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="170" viewBox="0 0 140 170">
+        <ellipse cx="70" cy="163" rx="30" ry="7" fill="#2a1f18" opacity="0.2"/>
+        <rect x="60" y="118" width="20" height="48" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="70" cy="86" r="34" fill="#d4b56a" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M42,72 L98,100 M44,100 L96,72 M40,86 L100,86" stroke="#a9873f" stroke-width="1.4" opacity="0.6"/>
+        <line x1="36" y1="94" x2="104" y2="94" stroke="#5a4530" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="70" cy="86" r="20" fill="none" stroke="#a63d3d" stroke-width="4"/>
+        <circle cx="70" cy="86" r="12" fill="none" stroke="#e8dcc0" stroke-width="3"/>
+        <circle cx="70" cy="86" r="5" fill="#a63d3d"/>
+      </svg>`,
+    targetDummyBroken: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="170" viewBox="0 0 140 170">
+        <ellipse cx="70" cy="163" rx="30" ry="7" fill="#2a1f18" opacity="0.2"/>
+        <rect x="60" y="118" width="20" height="48" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M62,130 L70,138 L64,150" stroke="#2a1f18" stroke-width="1.4" fill="none" opacity="0.4"/>
+        <path d="M40,82 Q60,66 82,80 Q96,90 88,102 Q66,112 46,100 Q34,92 40,82 Z" fill="#d4b56a" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M42,86 L60,74 M50,96 L70,84 M60,100 L84,90" stroke="#a9873f" stroke-width="1.4" opacity="0.6"/>
+        <line x1="36" y1="90" x2="70" y2="70" stroke="#5a4530" stroke-width="5" stroke-linecap="round"/>
+        <line x1="104" y1="98" x2="88" y2="80" stroke="#5a4530" stroke-width="5" stroke-linecap="round"/>
+        <path d="M52,78 Q64,86 60,98" fill="none" stroke="#2a1f18" stroke-width="2.5"/>
+        <circle cx="58" cy="86" r="7" fill="none" stroke="#a63d3d" stroke-width="3" opacity="0.5"/>
+        <ellipse cx="105" cy="70" rx="6" ry="3" fill="#d4b56a" stroke="#2a1f18" stroke-width="1.5" transform="rotate(30 105 70)"/>
+        <ellipse cx="112" cy="60" rx="5" ry="2.5" fill="#d4b56a" stroke="#2a1f18" stroke-width="1.5" transform="rotate(20 112 60)"/>
+      </svg>`,
+    scorchMark: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="100" viewBox="0 0 160 100">
+        <ellipse cx="80" cy="60" rx="55" ry="18" fill="#2a1f18" opacity="0.45"/>
+        <path d="M80,60 L40,30" stroke="#2a1f18" stroke-width="2" opacity="0.3"/>
+        <path d="M80,60 L120,28" stroke="#2a1f18" stroke-width="2" opacity="0.3"/>
+        <path d="M80,60 L30,68" stroke="#2a1f18" stroke-width="1.6" opacity="0.25"/>
+        <path d="M80,60 L128,72" stroke="#2a1f18" stroke-width="1.6" opacity="0.25"/>
+        <circle cx="70" cy="54" r="3" fill="#e8a24a" opacity="0.6"/>
+        <circle cx="92" cy="58" r="2.4" fill="#e8a24a" opacity="0.5"/>
+      </svg>`,
+    practiceRing: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+        <circle cx="80" cy="80" r="55" fill="none" stroke="#8a7a68" stroke-width="3" stroke-dasharray="6 6" opacity="0.7"/>
+        <circle cx="80" cy="80" r="35" fill="none" stroke="#8a7a68" stroke-width="2.5" stroke-dasharray="5 5" opacity="0.5"/>
+        <line x1="80" y1="65" x2="80" y2="95" stroke="#2a1f18" stroke-width="1.4" opacity="0.5"/>
+        <line x1="65" y1="80" x2="95" y2="80" stroke="#2a1f18" stroke-width="1.4" opacity="0.5"/>
+      </svg>`,
+    noticeBoard: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="130" viewBox="0 0 160 130">
+        <rect x="20" y="40" width="10" height="80" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <rect x="130" y="40" width="10" height="80" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <rect x="15" y="20" width="130" height="70" fill="#6b5238" stroke="#2a1f18" stroke-width="3"/>
+        <rect x="15" y="20" width="130" height="70" fill="url(#hatch)" opacity="0.3"/>
+        <rect x="28" y="30" width="36" height="26" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2" transform="rotate(-4 46 43)"/>
+        <rect x="70" y="34" width="34" height="24" fill="#f0e6d2" stroke="#2a1f18" stroke-width="2" transform="rotate(3 87 46)"/>
+        <rect x="106" y="28" width="30" height="22" fill="#e8dcc0" stroke="#2a1f18" stroke-width="2" transform="rotate(-2 121 39)"/>
+        <line x1="36" y1="40" x2="56" y2="40" stroke="#2a1f18" stroke-width="1.4" opacity="0.6" transform="rotate(-4 46 43)"/>
+        <line x1="36" y1="48" x2="52" y2="48" stroke="#2a1f18" stroke-width="1.4" opacity="0.6" transform="rotate(-4 46 43)"/>
+      </svg>`,
+    friendBeacon: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="170" viewBox="0 0 140 170">
+        <ellipse cx="70" cy="160" rx="30" ry="7" fill="#2a1f18" opacity="0.2"/>
+        <polygon points="56,158 50,90 62,50 78,50 90,90 84,158" fill="#8a8478" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="56,158 50,90 62,50 70,50 70,158" fill="url(#deepHatch)" opacity="0.35"/>
+        <circle cx="70" cy="46" r="22" fill="url(#glow)"/>
+        <circle cx="64" cy="42" r="10" fill="none" stroke="#e8dcc0" stroke-width="2"/>
+        <circle cx="76" cy="42" r="10" fill="none" stroke="#e8dcc0" stroke-width="2"/>
+      </svg>`,
+    hut: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="170" viewBox="0 0 160 170">
+        <ellipse cx="80" cy="160" rx="60" ry="9" fill="#2a1f18" opacity="0.18"/>
+        <rect x="35" y="90" width="90" height="65" fill="#c9a877" stroke="#2a1f18" stroke-width="3.5"/>
+        <rect x="35" y="90" width="90" height="65" fill="url(#hatch)" opacity="0.25"/>
+        <polygon points="20,90 80,35 140,90" fill="#8a6a48" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <path d="M30,80 L50,80 M35,68 L60,68 M45,56 L65,56 M55,46 L70,46" stroke="#2a1f18" stroke-width="1.6" opacity="0.4"/>
+        <path d="M130,80 L110,80 M125,68 L100,68 M115,56 L95,56 M105,46 L90,46" stroke="#2a1f18" stroke-width="1.6" opacity="0.4"/>
+        <rect x="70" y="120" width="24" height="35" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <circle cx="88" cy="137" r="1.8" fill="#2a1f18"/>
+        <rect x="45" y="105" width="18" height="18" fill="#bcdfe8" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="54" y1="105" x2="54" y2="123" stroke="#2a1f18" stroke-width="1.4"/>
+        <line x1="45" y1="114" x2="63" y2="114" stroke="#2a1f18" stroke-width="1.4"/>
+        <rect x="100" y="20" width="14" height="24" fill="#7a756a" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M107,18 Q100,8 108,0" stroke="#c9c4b8" stroke-width="2.5" fill="none" opacity="0.5"/>
+      </svg>`,
+    lodge: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="220" height="180" viewBox="0 0 220 180">
+        <ellipse cx="110" cy="170" rx="85" ry="9" fill="#2a1f18" opacity="0.18"/>
+        <rect x="40" y="100" width="140" height="70" fill="#b98a5a" stroke="#2a1f18" stroke-width="3.5"/>
+        <rect x="40" y="100" width="140" height="70" fill="url(#hatch)" opacity="0.22"/>
+        <polygon points="20,100 110,40 200,100" fill="#6b5238" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <line x1="110" y1="40" x2="110" y2="18" stroke="#5a4530" stroke-width="3"/>
+        <polygon points="110,18 132,26 110,34" fill="#a63d3d" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="94" y="132" width="32" height="38" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <rect x="55" y="118" width="22" height="20" fill="#bcdfe8" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="143" y="118" width="22" height="20" fill="#bcdfe8" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="66" y1="118" x2="66" y2="138" stroke="#2a1f18" stroke-width="1.4"/>
+        <line x1="55" y1="128" x2="77" y2="128" stroke="#2a1f18" stroke-width="1.4"/>
+        <line x1="154" y1="118" x2="154" y2="138" stroke="#2a1f18" stroke-width="1.4"/>
+        <line x1="143" y1="128" x2="165" y2="128" stroke="#2a1f18" stroke-width="1.4"/>
+      </svg>`,
+    arenaRing: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="360" height="260" viewBox="0 0 360 260">
+        <ellipse cx="180" cy="140" rx="160" ry="92" fill="none" stroke="#5a4530" stroke-width="7" opacity="0.9"/>
+        <ellipse cx="180" cy="140" rx="150" ry="85" fill="#c9a877" stroke="#2a1f18" stroke-width="4"/>
+        <ellipse cx="180" cy="140" rx="150" ry="85" fill="url(#hatch)" opacity="0.15"/>
+        <rect x="336" y="128" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="293" y="62" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="176" y="42" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="56" y="62" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="16" y="128" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="56" y="188" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="176" y="212" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="293" y="188" width="8" height="26" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="170" y1="42" x2="170" y2="12" stroke="#5a4530" stroke-width="3"/>
+        <polygon points="170,12 190,20 170,28" fill="#d4a53d" stroke="#2a1f18" stroke-width="2"/>
+        <line x1="192" y1="42" x2="192" y2="16" stroke="#5a4530" stroke-width="3"/>
+        <polygon points="192,16 208,23 192,30" fill="#a63d3d" stroke="#2a1f18" stroke-width="2"/>
+        <rect x="30" y="150" width="50" height="20" rx="9" fill="#8a6a48" stroke="#2a1f18" stroke-width="2.5"/>
+        <rect x="280" y="145" width="50" height="20" rx="9" fill="#8a6a48" stroke="#2a1f18" stroke-width="2.5"/>
+      </svg>`,
+  };
+
+  const hubFeatureMeta = {
+    targetDummy: { width: 110, height: 134, groundFraction: 163 / 170 },
+    targetDummyBroken: { width: 110, height: 134, groundFraction: 163 / 170 },
+    scorchMark: { width: 140, height: 88, groundFraction: 78 / 100 },
+    practiceRing: { width: 190, height: 190, groundFraction: 0.85 },
+    noticeBoard: { width: 150, height: 122, groundFraction: 120 / 130 },
+    friendBeacon: { width: 110, height: 134, groundFraction: 160 / 170 },
+    hut: { width: 175, height: 186, groundFraction: 160 / 170 },
+    lodge: { width: 235, height: 192, groundFraction: 170 / 180 },
+    arenaRing: { width: 360, height: 260, groundFraction: 225 / 260 },
+  };
+
+  const hubFeatures = {};
+  for (const [key, svg] of Object.entries(hubFeatureSvgs)) {
+    hubFeatures[key] = { image: svgToImage(svg), width: hubFeatureMeta[key].width, height: hubFeatureMeta[key].height, groundFraction: hubFeatureMeta[key].groundFraction };
+  }
+
+  // --- Boss Arenas -----------------------------------------------------
+
+  const bossArenaSvgs = {
+    arenaClearing: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="400" height="260" viewBox="0 0 400 260">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <ellipse cx="200" cy="130" rx="190" ry="118" fill="#8a8478" stroke="#2a1f18" stroke-width="4"/>
+        <ellipse cx="200" cy="130" rx="190" ry="118" fill="url(#deepHatch)" opacity="0.2"/>
+        <ellipse cx="200" cy="130" rx="150" ry="92" fill="none" stroke="#5f5a4f" stroke-width="2.5" opacity="0.6"/>
+        <ellipse cx="200" cy="130" rx="105" ry="64" fill="none" stroke="#5f5a4f" stroke-width="2" opacity="0.5"/>
+        <ellipse cx="200" cy="130" rx="60" ry="38" fill="#7a756a" stroke="#5f5a4f" stroke-width="2" opacity="0.7"/>
+        <line x1="200" y1="12" x2="200" y2="248" stroke="#5f5a4f" stroke-width="2" opacity="0.4"/>
+        <line x1="10" y1="130" x2="390" y2="130" stroke="#5f5a4f" stroke-width="2" opacity="0.4"/>
+      </svg>`,
+    runeDormant: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+        <circle cx="80" cy="80" r="60" fill="none" stroke="#5f5a4f" stroke-width="3"/>
+        <circle cx="80" cy="80" r="42" fill="none" stroke="#5f5a4f" stroke-width="2"/>
+        <polygon points="80,30 118,102 42,102" fill="none" stroke="#5f5a4f" stroke-width="2.5"/>
+        <circle cx="80" cy="80" r="10" fill="#5f5a4f"/>
+      </svg>`,
+    runeChanneling: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+        <defs>
+          <radialGradient id="runeWindGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
+            <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="80" cy="80" r="70" fill="url(#runeWindGlow)" opacity="0.5"/>
+        <circle cx="80" cy="80" r="60" fill="none" stroke="#9b7fc4" stroke-width="3"/>
+        <circle cx="80" cy="80" r="42" fill="none" stroke="#c9a8f0" stroke-width="2.5"/>
+        <polygon points="80,30 118,102 42,102" fill="none" stroke="#e8d8ff" stroke-width="3"/>
+        <circle cx="80" cy="80" r="12" fill="#8fe0ff"/>
+        <circle cx="60" cy="40" r="2.5" fill="#c9a8f0"/>
+        <circle cx="110" cy="50" r="2" fill="#c9a8f0"/>
+        <circle cx="100" cy="120" r="2.5" fill="#c9a8f0"/>
+      </svg>`,
+  };
+
+  const bossArenaMeta = {
+    arenaClearing: { width: 400, height: 260, groundFraction: 0.5 }, // flat ground decal, anchored at its own center
+    runeDormant: { width: 120, height: 120, groundFraction: 0.6 },
+    runeChanneling: { width: 130, height: 130, groundFraction: 0.6 },
+  };
+
+  const bossArena = {};
+  for (const [key, svg] of Object.entries(bossArenaSvgs)) {
+    bossArena[key] = { image: svgToImage(svg), width: bossArenaMeta[key].width, height: bossArenaMeta[key].height, groundFraction: bossArenaMeta[key].groundFraction };
+  }
+
+  // Crystal barrier segment — a standalone ground sprite (unlike the wall
+  // spells above, these are boss-arena furniture, not a spell effect) drawn
+  // in a ring of 8 by game.js using barrierRingPoints() below.
+  const crystalBarrierSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="220" viewBox="0 0 120 220">
+      <defs>
+        <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+          <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+          <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+        </pattern>
+        <radialGradient id="crystalCoreGlowLocal" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#8fe0ff" stop-opacity="0.9"/>
+          <stop offset="1" stop-color="#8fe0ff" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <ellipse cx="60" cy="210" rx="40" ry="8" fill="#2a1f18" opacity="0.3"/>
+      <polygon points="35,205 20,120 40,40 60,5 80,40 100,120 85,205" fill="#5a4a8a" stroke="#c9a8f0" stroke-width="3.5" stroke-linejoin="round" opacity="0.85"/>
+      <polygon points="60,5 80,40 100,120 85,205 65,205 65,50" fill="url(#deepHatch)" opacity="0.3"/>
+      <polygon points="50,60 60,5 45,110 38,100" fill="#e8d8ff" opacity="0.4"/>
+      <circle cx="60" cy="180" r="16" fill="url(#crystalCoreGlowLocal)"/>
+    </svg>`;
+  const crystalBarrier = { image: svgToImage(crystalBarrierSvg), width: 90, height: 165, groundFraction: 205 / 220 };
+
+  // 8 evenly-spaced points around an ellipse, matching the design doc's
+  // barrierRing generator — game.js places one crystalBarrier sprite at
+  // each point to ring the arena.
+  function barrierRingPoints(cx, cy, rx, ry, count = 8) {
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      pts.push({ x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) });
+    }
+    return pts;
+  }
+
+  // --- Boss particles & impact ------------------------------------------
+
+  // Same radial-scatter formula as the design doc's crystalShardBurst/
+  // crushDebris loops, baked into a static SVG at load time (matching how
+  // every other multi-particle burst in this file — fireImpact,
+  // earthImpact — is a single pre-rendered image, not literal per-frame
+  // particles) rather than left as an empty group to fill at runtime.
+  function radialShardPolygons({ count, seedBase, rxBase, ryBase, angleJitter, distBase, distStep }) {
+    let svg = "";
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (i % 3) * angleJitter;
+      const dist = distBase + (i % 3) * distStep;
+      const cx = 100 + Math.cos(angle) * dist;
+      const cy = 100 + Math.sin(angle) * dist;
+      const rx = rxBase + (i % 3) * 2;
+      const ry = ryBase + (i % 3) * (ryBase > 6 ? 3 : 1.5);
+      svg += `<polygon points="${rockPoints(cx, cy, rx, ry, 0.28, seedBase + i)}" fill="#7a5cc4" stroke="#e8d8ff" stroke-width="2"></polygon>`;
+    }
+    return svg;
+  }
+  function radialDebrisPolygons(count, seedBase) {
+    let svg = "";
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (i % 3) * 0.15;
+      const dist = 26 + (i % 3) * 16;
+      const cx = 100 + Math.cos(angle) * dist;
+      const cy = 100 + Math.sin(angle) * dist;
+      svg += `<polygon points="${rockPoints(cx, cy, 6 + (i % 3) * 2, 5 + (i % 3) * 1.5, 0.3, seedBase + i)}" fill="#8a7458" stroke="#2a1f18" stroke-width="2"></polygon>`;
+    }
+    return svg;
+  }
+
+  const bossEffectSvgs = {
+    slamShardBurst: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+        <defs>
+          <radialGradient id="slamWindGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
+            <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="100" cy="100" r="90" fill="url(#slamWindGlow)" opacity="0.3"/>
+        <circle cx="100" cy="100" r="55" fill="none" stroke="#c9a8f0" stroke-width="3" opacity="0.6"/>
+        <circle cx="100" cy="100" r="78" fill="none" stroke="#9b7fc4" stroke-width="2" opacity="0.35"/>
+        <path d="M100,100 L70,150 M100,100 L135,145 M100,100 L60,90 M100,100 L145,75" stroke="#5a4a8a" stroke-width="2" opacity="0.4"/>
+        ${radialShardPolygons({ count: 10, seedBase: 400, rxBase: 5, ryBase: 8, angleJitter: 0.12, distBase: 24, distStep: 18 })}
+        <circle cx="100" cy="100" r="14" fill="#8fe0ff"/>
+      </svg>`,
+    coreShatter: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+        <defs>
+          <radialGradient id="coreShatterGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#8fe0ff" stop-opacity="0.9"/>
+            <stop offset="1" stop-color="#8fe0ff" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="80" cy="80" r="72" fill="url(#coreShatterGlow)" opacity="0.8"/>
+        <polygon points="80,25 90,55 122,50 96,70 110,100 80,82 50,100 64,70 38,50 70,55" fill="#8fe0ff" stroke="#e8d8ff" stroke-width="2.5"/>
+        <circle cx="80" cy="80" r="14" fill="#e8d8ff"/>
+        <polygon points="42,42 34,30 48,34" fill="#9b7fc4" opacity="0.85"/>
+        <polygon points="120,40 132,30 126,46" fill="#9b7fc4" opacity="0.85"/>
+        <polygon points="120,120 132,130 118,134" fill="#9b7fc4" opacity="0.85"/>
+      </svg>`,
+  };
+  const bossEffectMeta = {
+    slamShardBurst: { width: 130, height: 130, groundFraction: 0.5 },
+    coreShatter: { width: 110, height: 110, groundFraction: 0.5 },
+  };
+  const bossEffects = {};
+  for (const [key, svg] of Object.entries(bossEffectSvgs)) {
+    bossEffects[key] = { image: svgToImage(svg), width: bossEffectMeta[key].width, height: bossEffectMeta[key].height, groundFraction: bossEffectMeta[key].groundFraction };
+  }
+
+  // --- Earth Crush (Wall Breaker) ---------------------------------------
+
+  // "A smashing spell that shatters an Earth Wall — or any rock obstacle —
+  // into flying debris." First spell taught in the Spawn Hub; used both on
+  // the village's boundary gate and (like the existing Earth Breaker spell)
+  // on ordinary rocks.
+  const earthCrushSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+      <defs>
+        <radialGradient id="earthCrushGlow" cx="0.5" cy="0.55" r="0.5">
+          <stop offset="0" stop-color="#a68b5c" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#a68b5c" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <circle cx="100" cy="100" r="85" fill="url(#earthCrushGlow)" opacity="0.5"/>
+      <ellipse cx="100" cy="150" rx="50" ry="10" fill="#2a1f18" opacity="0.2"/>
+      <polygon points="72,150 62,120 78,100 66,80 84,60 100,150" fill="#8a8478" stroke="#2a1f18" stroke-width="2.5" opacity="0.5"/>
+      <polygon points="128,150 138,118 122,98 132,78 116,58 100,150" fill="#7a756a" stroke="#2a1f18" stroke-width="2.5" opacity="0.5"/>
+      ${radialDebrisPolygons(10, 200)}
+      <circle cx="100" cy="100" r="16" fill="#6b5a44" stroke="#e8dcc0" stroke-width="2.5"/>
+    </svg>`;
+  spellEffects.earthCrush = {
+    image: svgToImage(earthCrushSvg),
+    width: 130,
+    height: 130,
+    groundFraction: 0.5,
+  };
+
+  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, biomeTrees, biomeFoliage, enemyRigs, npcs, hubFeatures, bossArena, crystalBarrier, barrierRingPoints, bossEffects };
 })();
