@@ -554,5 +554,369 @@ const ForestAssets = (() => {
     viewHeight: 340,
   };
 
-  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig };
+  // --- Shared point-list helpers for the other rigged creatures ----------
+
+  function blobPointList(cx, cy, rx, ry, seed, count = 16) {
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      const r = 1 + 0.14 * Math.sin(angle * 3 + seed) + 0.08 * Math.sin(angle * 7 + seed * 1.7);
+      pts.push({ x: cx + rx * r * Math.cos(angle), y: cy + ry * r * Math.sin(angle) });
+    }
+    return pts;
+  }
+
+  function pointsToStr(pts) {
+    return pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  }
+
+  function legPointList(cx, cy, angle, len, width) {
+    const dx = Math.cos(angle), dy = Math.sin(angle);
+    const px = -dy, py = dx;
+    return [
+      { x: cx + px * width, y: cy + py * width },
+      { x: cx + dx * len + px * width * 0.4, y: cy + dy * len + py * width * 0.4 },
+      { x: cx + dx * len - px * width * 0.4, y: cy + dy * len - py * width * 0.4 },
+      { x: cx - px * width, y: cy - py * width },
+    ];
+  }
+
+  // --- Biome trees -----------------------------------------------------
+
+  // Unlike the Woodland Grove trees (uniform 140x160 viewBox, drawn via the
+  // shared drawTree()/TREE_VIEWBOX path in game.js), each biome tree keeps
+  // its own viewBox and is drawn as an ordinary ground sprite (same
+  // drawGroundSprite() path as foliage/rocks/ambient) — simpler than forcing
+  // every biome's silhouette into one shared aspect ratio.
+  const biomeTreeSvgs = {
+    cypress: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="170" viewBox="0 0 140 170">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+          <clipPath id="cypressClip"><circle cx="82" cy="60" r="24"/></clipPath>
+        </defs>
+        <path d="M64,160 L60,90 L80,90 L76,160 Z" fill="#4a3a2a" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M55,160 Q50,150 58,145 Q52,158 60,160 Z" fill="#4a3a2a" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M85,160 Q92,152 84,146 Q90,158 80,160 Z" fill="#4a3a2a" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="70" cy="65" r="34" fill="#4a5a3a" stroke="#2a1f18" stroke-width="3.5"/>
+        <circle cx="48" cy="80" r="20" fill="#4a5a3a" stroke="#2a1f18" stroke-width="3.5"/>
+        <circle cx="92" cy="80" r="20" fill="#4a5a3a" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M50,95 Q46,115 40,135" stroke="#5a6a4a" stroke-width="2" fill="none" opacity="0.6"/>
+        <path d="M92,98 Q96,118 100,138" stroke="#5a6a4a" stroke-width="2" fill="none" opacity="0.6"/>
+        <circle cx="82" cy="60" r="24" fill="url(#deepHatch)" opacity="0.4" clip-path="url(#cypressClip)"/>
+      </svg>`,
+
+    windBentPine: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="170" viewBox="0 0 140 170">
+        <rect x="64" y="130" width="12" height="24" fill="#5a4530" stroke="#2a1f18" stroke-width="3" transform="rotate(-8 70 142)"/>
+        <polygon points="72,60 112,138 32,142" fill="#5c6b5f" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round" transform="rotate(-6 70 100)"/>
+        <polygon points="72,35 100,102 44,105" fill="#6b7a68" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round" transform="rotate(-6 70 70)"/>
+        <polygon points="72,14 90,68 54,70" fill="#7a8874" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round" transform="rotate(-6 70 42)"/>
+      </svg>`,
+
+    snowPine: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="170" viewBox="0 0 140 170">
+        <rect x="64" y="130" width="12" height="24" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <polygon points="70,60 110,138 30,142" fill="#3f5233" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="70,35 98,102 42,105" fill="#4d6b3f" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
+        <polygon points="70,14 88,68 52,70" fill="#5c7a4a" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M40,132 Q70,120 100,132 L96,140 Q70,130 44,140 Z" fill="#eef4f6" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M48,98 Q70,90 92,98 L88,105 Q70,99 52,105 Z" fill="#eef4f6" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M56,65 Q70,58 84,65 L80,71 Q70,66 60,71 Z" fill="#eef4f6" stroke="#2a1f18" stroke-width="1.6"/>
+      </svg>`,
+  };
+
+  const biomeTreeMeta = {
+    cypress: { width: 128, height: 155, groundFraction: 160 / 170 },
+    windBentPine: { width: 128, height: 155, groundFraction: 0.9 },
+    snowPine: { width: 128, height: 155, groundFraction: 0.906 },
+  };
+
+  const biomeTrees = {};
+  for (const [key, svg] of Object.entries(biomeTreeSvgs)) {
+    biomeTrees[key] = { image: svgToImage(svg), width: biomeTreeMeta[key].width, height: biomeTreeMeta[key].height, groundFraction: biomeTreeMeta[key].groundFraction };
+  }
+
+  // --- Biome foliage & ground details --------------------------------------
+
+  const screePoints = {
+    a: rockPoints(45, 90, 26, 20, 0.22, 111),
+    b: rockPoints(80, 95, 22, 17, 0.2, 112),
+    c: rockPoints(105, 85, 18, 15, 0.24, 113),
+  };
+  const mudBankPts = pointsToStr(blobPointList(100, 90, 55, 38, 17));
+  const mudPoolPts = pointsToStr(blobPointList(100, 90, 44, 29, 17));
+
+  const biomeFoliageSvgs = {
+    // Marsh Bog
+    reedCluster: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">
+        <path d="M40,130 Q35,90 42,55" stroke="#6b7a4a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M60,130 Q58,85 65,42" stroke="#6b7a4a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M80,130 Q84,88 78,50" stroke="#6b7a4a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M100,130 Q104,92 96,58" stroke="#6b7a4a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <ellipse cx="65" cy="38" rx="6" ry="16" fill="#5a4530" stroke="#2a1f18" stroke-width="2"/>
+        <ellipse cx="78" cy="46" rx="5" ry="14" fill="#6b5238" stroke="#2a1f18" stroke-width="2"/>
+      </svg>`,
+    mudPool: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="200" height="160" viewBox="0 0 200 160">
+        <polygon points="${mudBankPts}" fill="#6b6248" stroke="#2a1f18" stroke-width="3.5"/>
+        <polygon points="${mudPoolPts}" fill="#4a4530" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="90" cy="80" r="4" fill="#3a3520" opacity="0.7"/>
+        <circle cx="110" cy="95" r="3" fill="#3a3520" opacity="0.7"/>
+        <circle cx="75" cy="95" r="2.5" fill="#3a3520" opacity="0.6"/>
+      </svg>`,
+
+    // Mountain Foothills
+    scree: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="130" viewBox="0 0 140 130">
+        <polygon points="${screePoints.a}" fill="#9aa0a0" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+        <polygon points="${screePoints.b}" fill="#848a8a" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+        <polygon points="${screePoints.c}" fill="#9aa0a0" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+      </svg>`,
+    alpineTuft: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="120" height="100" viewBox="0 0 120 100">
+        <path d="M30,90 Q28,70 35,50" stroke="#6b8049" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M45,90 Q46,65 50,45" stroke="#6b8049" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M60,90 Q60,68 60,42" stroke="#6b8049" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <circle cx="50" cy="42" r="5" fill="#8a6bb0" stroke="#2a1f18" stroke-width="1.4"/>
+        <circle cx="60" cy="38" r="5" fill="#9b7fc4" stroke="#2a1f18" stroke-width="1.4"/>
+        <circle cx="38" cy="48" r="4.5" fill="#8a6bb0" stroke="#2a1f18" stroke-width="1.4"/>
+      </svg>`,
+
+    // Frostfall Tundra
+    frozenShrub: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="130" viewBox="0 0 140 130">
+        <circle cx="50" cy="82" r="24" fill="#4f6636" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="85" cy="82" r="22" fill="#4f6636" stroke="#2a1f18" stroke-width="3"/>
+        <circle cx="68" cy="65" r="26" fill="#5a7440" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M45,100 L40,120" stroke="#bcdfe8" stroke-width="3" stroke-linecap="round"/>
+        <path d="M65,105 L62,124" stroke="#bcdfe8" stroke-width="3" stroke-linecap="round"/>
+        <path d="M85,100 L90,120" stroke="#bcdfe8" stroke-width="3" stroke-linecap="round"/>
+        <path d="M100,92 L106,108" stroke="#bcdfe8" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>`,
+    snowdrift: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="100" viewBox="0 0 160 100">
+        <path d="M10,90 Q40,55 80,65 Q120,50 150,80 L150,95 L10,95 Z" fill="#eef4f6" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M30,80 Q50,72 65,76" stroke="#bcdfe8" stroke-width="2" fill="none" opacity="0.7"/>
+        <path d="M90,72 Q108,66 122,72" stroke="#bcdfe8" stroke-width="2" fill="none" opacity="0.7"/>
+      </svg>`,
+
+    // Sunmeadow Clearing
+    wildflowerPatch: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="120" viewBox="0 0 140 120">
+        <line x1="35" y1="115" x2="35" y2="80" stroke="#4f6636" stroke-width="3"/>
+        <line x1="70" y1="115" x2="70" y2="75" stroke="#4f6636" stroke-width="3"/>
+        <line x1="105" y1="115" x2="105" y2="82" stroke="#4f6636" stroke-width="3"/>
+        <circle cx="35" cy="80" r="5" fill="#d4a53d" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="26" cy="72" r="5" fill="#c9622f" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="44" cy="72" r="5" fill="#e0c060" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="70" cy="75" r="5" fill="#a63d3d" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="61" cy="68" r="5" fill="#e0c060" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="79" cy="68" r="5" fill="#9b7fc4" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="105" cy="82" r="5" fill="#8a6bb0" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="96" cy="75" r="5" fill="#4a6a8a" stroke="#2a1f18" stroke-width="1.5"/>
+        <circle cx="114" cy="75" r="5" fill="#d4a53d" stroke="#2a1f18" stroke-width="1.5"/>
+      </svg>`,
+    wheatGrass: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="130" viewBox="0 0 140 130">
+        <path d="M40,125 Q35,95 45,60" stroke="#c9a24a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M55,125 Q52,90 60,50" stroke="#d4ae55" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M70,125 Q70,88 70,45" stroke="#c9a24a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M85,125 Q88,90 80,50" stroke="#d4ae55" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M100,125 Q105,95 95,60" stroke="#c9a24a" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <ellipse cx="45" cy="58" rx="4" ry="9" fill="#e8c56a" stroke="#2a1f18" stroke-width="1"/>
+        <ellipse cx="60" cy="48" rx="4" ry="9" fill="#e8c56a" stroke="#2a1f18" stroke-width="1"/>
+        <ellipse cx="80" cy="48" rx="4" ry="9" fill="#e8c56a" stroke="#2a1f18" stroke-width="1"/>
+        <ellipse cx="95" cy="58" rx="4" ry="9" fill="#e8c56a" stroke="#2a1f18" stroke-width="1"/>
+      </svg>`,
+    sunflowerCluster: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <line x1="55" y1="150" x2="58" y2="90" stroke="#4f6636" stroke-width="4"/>
+        <line x1="95" y1="150" x2="90" y2="100" stroke="#4f6636" stroke-width="4"/>
+        <circle cx="58" cy="80" r="18" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <circle cx="90" cy="90" r="14" fill="#5a4530" stroke="#2a1f18" stroke-width="2.5"/>
+        <ellipse cx="58" cy="55" rx="7" ry="14" fill="#e0c060" stroke="#2a1f18" stroke-width="1.4"/>
+        <ellipse cx="58" cy="105" rx="7" ry="14" fill="#e0c060" stroke="#2a1f18" stroke-width="1.4"/>
+        <ellipse cx="33" cy="80" rx="14" ry="7" fill="#e0c060" stroke="#2a1f18" stroke-width="1.4"/>
+        <ellipse cx="83" cy="80" rx="14" ry="7" fill="#e0c060" stroke="#2a1f18" stroke-width="1.4"/>
+      </svg>`,
+
+    // Hollow Deep
+    glowingFungus: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="130" viewBox="0 0 140 130">
+        <defs>
+          <radialGradient id="fungusGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#8fd9b0" stop-opacity="0.6"/>
+            <stop offset="1" stop-color="#8fd9b0" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="70" cy="70" r="40" fill="url(#fungusGlow)" opacity="0.3"/>
+        <rect x="45" y="90" width="10" height="26" rx="4" fill="#3a2c4a" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M28,90 Q28,68 50,66 Q72,68 72,90 Q50,98 28,90 Z" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2.5"/>
+        <rect x="80" y="98" width="8" height="20" rx="3" fill="#3a2c4a" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M65,98 Q65,80 84,78 Q103,80 103,98 Q84,105 65,98 Z" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2.5"/>
+        <circle cx="50" cy="75" r="2.5" fill="#e8d8ff"/>
+        <circle cx="84" cy="85" r="2" fill="#d8fff2"/>
+      </svg>`,
+    crystalCluster: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">
+        <defs>
+          <radialGradient id="crystalGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
+            <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="70" cy="80" r="46" fill="url(#crystalGlow)" opacity="0.25"/>
+        <polygon points="50,120 42,80 58,55 70,80 62,120" fill="#9b7fc4" stroke="#e8d8ff" stroke-width="2.5"/>
+        <polygon points="85,120 78,70 95,45 108,72 100,120" fill="#7a5cc4" stroke="#d8c8f0" stroke-width="2.5"/>
+        <polygon points="105,120 100,90 112,72 122,92 118,120" fill="#9b7fc4" stroke="#e8d8ff" stroke-width="2"/>
+      </svg>`,
+    stalagmite: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="100" height="140" viewBox="0 0 100 140">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <polygon points="50,10 65,90 62,130 38,130 35,90" fill="#6b6480" stroke="#2a1f18" stroke-width="3"/>
+        <polygon points="50,10 60,80 50,130 45,130 40,80" fill="url(#deepHatch)" opacity="0.3"/>
+      </svg>`,
+  };
+
+  const biomeFoliageMeta = {
+    reedCluster: { width: 60, height: 60, groundFraction: 130 / 140 },
+    mudPool: { width: 172, height: 138, groundFraction: 132 / 160 },
+    scree: { width: 118, height: 110, groundFraction: 112 / 130 },
+    alpineTuft: { width: 66, height: 55, groundFraction: 90 / 100 },
+    frozenShrub: { width: 72, height: 67, groundFraction: 120 / 130 },
+    snowdrift: { width: 150, height: 94, groundFraction: 95 / 100 },
+    wildflowerPatch: { width: 100, height: 86, groundFraction: 115 / 120 },
+    wheatGrass: { width: 66, height: 61, groundFraction: 125 / 130 },
+    sunflowerCluster: { width: 78, height: 89, groundFraction: 150 / 160 },
+    glowingFungus: { width: 66, height: 61, groundFraction: 118 / 130 },
+    crystalCluster: { width: 70, height: 70, groundFraction: 120 / 140 },
+    stalagmite: { width: 55, height: 77, groundFraction: 130 / 140 },
+  };
+
+  const biomeFoliage = {};
+  for (const [key, svg] of Object.entries(biomeFoliageSvgs)) {
+    biomeFoliage[key] = { image: svgToImage(svg), width: biomeFoliageMeta[key].width, height: biomeFoliageMeta[key].height, groundFraction: biomeFoliageMeta[key].groundFraction };
+  }
+
+  // --- Biome enemy rigs --------------------------------------------------
+
+  // Mire Leech (Marsh Bog) — three body segments in a chain, each animated
+  // with an independent phase-lagged bob for an inchworm-style crawl.
+  const mireLeechRig = {
+    segments: {
+      tail: { points: blobPointList(55, 150, 42, 30, 51), fill: "#4a5a3a" },
+      mid: { points: blobPointList(100, 135, 38, 28, 52), fill: "#556a44" },
+      head: { points: blobPointList(145, 120, 30, 24, 53), fill: "#5f7550" },
+    },
+    chainOrder: ["tail", "mid", "head"],
+    mouth: { x: 150, y: 112, r: 9 },
+    fangs: ["M138,100 L130,88", "M152,98 L152,84"],
+    eyes: [{ x: 130, y: 86, r: 4 }, { x: 152, y: 82, r: 4 }],
+    drips: [{ x: 75, y: 145, rx: 8, ry: 5 }, { x: 45, y: 160, rx: 7, ry: 4 }],
+    groundAnchor: { x: 100, y: 170 },
+    viewHeight: 200,
+  };
+
+  // Crag Ram (Mountain Foothills) — quadruped, same rotate-group rig shape
+  // as the golem's limbs, sized for a walk cycle + headbutt telegraph.
+  const cragRamRig = {
+    segments: {
+      torso: { points: blobPointList(95, 125, 46, 34, 61), fill: "#9a9488" },
+      head: { points: rockPointList(152, 92, 20, 18, 0.2, 62), fill: "#9a9488" },
+      patch1: { points: rockPointList(80, 108, 14, 10, 0.25, 63), fill: "#6b6a5c" },
+      patch2: { points: rockPointList(112, 128, 12, 9, 0.25, 64), fill: "#6b6a5c" },
+      legFL: { points: legPointList(70, 140, Math.PI / 2, 30, 5), fill: "#7a756a" },
+      legFR: { points: legPointList(125, 140, Math.PI / 2, 30, 5), fill: "#7a756a" },
+      legBL: { points: legPointList(85, 145, Math.PI / 2, 28, 5), fill: "#8a8478" },
+      legBR: { points: legPointList(110, 145, Math.PI / 2, 28, 5), fill: "#8a8478" },
+    },
+    groups: {
+      head: { segments: ["head"], pivot: { x: 140, y: 96 } },
+      torso: { segments: ["torso", "patch1", "patch2"], pivot: { x: 95, y: 125 } },
+      legFL: { segments: ["legFL"], pivot: { x: 70, y: 140 } },
+      legFR: { segments: ["legFR"], pivot: { x: 125, y: 140 } },
+      legBL: { segments: ["legBL"], pivot: { x: 85, y: 145 } },
+      legBR: { segments: ["legBR"], pivot: { x: 110, y: 145 } },
+    },
+    headDecor: ["M148,78 Q168,72 172,50 Q158,66 150,72", "M158,80 Q180,78 188,58 Q168,72 158,76"],
+    eyes: [{ x: 155, y: 90, r: 3 }],
+    fill: "#9a9488",
+    groundAnchor: { x: 100, y: 180 },
+    viewHeight: 200,
+  };
+
+  // Frost Wisp (Frostfall Tundra) — no legs, drifts on a slow bob with a
+  // sweeping tail and two loose shard fragments off its back.
+  const frostWispRig = {
+    segments: {
+      body: { points: blobPointList(95, 105, 50, 32, 71), fill: "#dff4f4" },
+      head: { points: blobPointList(150, 82, 26, 22, 72), fill: "#eefcfc" },
+    },
+    tailPath: "M55,110 Q30,120 15,105 Q35,115 50,100",
+    tailPivot: { x: 55, y: 110 },
+    shards: [
+      { points: [{ x: 90, y: 72 }, { x: 96, y: 50 }, { x: 100, y: 74 }] },
+      { points: [{ x: 105, y: 70 }, { x: 110, y: 48 }, { x: 114, y: 72 }] },
+    ],
+    eyes: [{ x: 142, y: 76, r: 5 }, { x: 162, y: 80, r: 5 }],
+    groundAnchor: { x: 100, y: 120 },
+    viewHeight: 170,
+  };
+
+  // Bramble Boar (Sunmeadow Clearing) — same quadruped rig shape as Crag
+  // Ram, faster gait, with a thorn-ridge spine and a single tusk instead of
+  // rock patches and horns.
+  const bramblingBoarRig = {
+    segments: {
+      body: { points: blobPointList(105, 110, 55, 36, 81), fill: "#8a6a48" },
+      head: { points: blobPointList(175, 92, 28, 22, 82), fill: "#8a6a48" },
+      legFL: { points: legPointList(75, 128, Math.PI / 2, 26, 5), fill: "#5a4530" },
+      legFR: { points: legPointList(155, 128, Math.PI / 2, 26, 5), fill: "#5a4530" },
+      legBL: { points: legPointList(100, 132, Math.PI / 2, 24, 5), fill: "#6b5238" },
+      legBR: { points: legPointList(135, 132, Math.PI / 2, 24, 5), fill: "#6b5238" },
+    },
+    groups: {
+      head: { segments: ["head"], pivot: { x: 150, y: 92 } },
+      torso: { segments: ["body"], pivot: { x: 105, y: 110 } },
+      legFL: { segments: ["legFL"], pivot: { x: 75, y: 128 } },
+      legFR: { segments: ["legFR"], pivot: { x: 155, y: 128 } },
+      legBL: { segments: ["legBL"], pivot: { x: 100, y: 132 } },
+      legBR: { segments: ["legBR"], pivot: { x: 135, y: 132 } },
+    },
+    bristlePath: "M60,100 Q75,85 92,95 Q108,80 125,92 Q142,80 158,90",
+    tuskPoints: [{ x: 192, y: 98 }, { x: 202, y: 102 }, { x: 192, y: 110 }],
+    eyes: [{ x: 188, y: 88, r: 3 }],
+    fill: "#8a6a48",
+    groundAnchor: { x: 110, y: 155 },
+    viewHeight: 170,
+  };
+
+  // Crystal Crawler (Hollow Deep) — 8 legs generated around one shared body
+  // pivot, animated as a rippling alternating gait rather than a
+  // facing-based walk, since it can move in any direction.
+  const crystalCrawlerRig = {
+    bodyPoints: rockPointList(100, 100, 32, 26, 0.22, 91),
+    legAngles: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => (i / 8) * Math.PI * 2),
+    legPivot: { x: 100, y: 100 },
+    legLength: 55,
+    legWidth: 4,
+    eyes: [{ x: 90, y: 95, r: 4 }, { x: 110, y: 95, r: 4 }],
+    mouth: { x: 100, y: 112, r: 3 },
+    groundAnchor: { x: 100, y: 100 },
+    viewHeight: 200,
+  };
+
+  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig };
+
+  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, biomeTrees, biomeFoliage, enemyRigs };
 })();
