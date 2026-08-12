@@ -71,6 +71,21 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
+// If the window loses focus while a key is held (alt-tab, clicking outside
+// the page, a DevTools panel stealing focus, etc.), the browser never sends
+// its keyup — without this, `keys.e` stays stuck true forever, which stops
+// startCasting() from ever firing again on the next real press and leaves
+// castSequence full of stale directions. Treat losing focus as releasing
+// everything, silently (no sigil flash — this isn't a real cast attempt).
+window.addEventListener("blur", () => {
+  const wasCasting = keys.e;
+  for (const key of Object.keys(keys)) keys[key] = false;
+  if (wasCasting) {
+    castingRingEl.classList.remove("visible");
+    castSequence = [];
+  }
+});
+
 // --- Spellcasting ------------------------------------------------------------
 
 // Same combos shown in the spellbook UI (index.html) — kept in sync with it
