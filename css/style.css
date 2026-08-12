@@ -25,3 +25,135 @@ html, body {
   image-rendering: pixelated;
   cursor: default;
 }
+
+/* Spellbook — quick-reference HUD panel, shown while casting (E) and
+   holding Q. Imported from the "MMO GAME" Claude Design project. */
+#spellbook {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  width: 400px;
+  display: flex;
+  background: #4a3626;
+  border: 4px solid #2a1f18;
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  font-family: "Nunito", sans-serif;
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+
+#spellbook.visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.spellbook-page {
+  flex: 1;
+  min-width: 0;
+  background: #e8dcc0;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.spellbook-page-left {
+  border-radius: 8px 2px 2px 8px;
+  box-shadow: inset -10px 0 14px -10px rgba(0, 0, 0, 0.35);
+}
+
+.spellbook-page-right {
+  border-radius: 2px 8px 8px 2px;
+  box-shadow: inset 10px 0 14px -10px rgba(0, 0, 0, 0.35);
+}
+
+.spellbook-title {
+  font-family: "Amatic SC", cursive;
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0 0 2px;
+  color: #2a1f18;
+  text-align: center;
+}
+
+.spellbook-flourish {
+  display: block;
+  margin: 0 auto 12px;
+}
+
+.spellbook-spine {
+  width: 10px;
+  background: #2a1f18;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.spellbook-hinge {
+  position: absolute;
+  left: -3px;
+  width: 16px;
+  height: 8px;
+  background: #3a2c1e;
+  border: 1.5px solid #1a1310;
+  border-radius: 2px;
+}
+
+.spellbook-hinge-top {
+  top: 18%;
+}
+
+.spellbook-hinge-bottom {
+  bottom: 18%;
+}
+
+.spell-entry {
+  margin-bottom: 12px;
+}
+
+.spell-entry:last-child {
+  margin-bottom: 0;
+}
+
+.spell-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.spell-icon {
+  flex-shrink: 0;
+}
+
+.spell-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: #2a1f18;
+}
+
+.spell-school {
+  font-size: 10px;
+  color: #5a4530;
+}
+
+.spell-combo {
+  display: flex;
+  gap: 3px;
+  margin-top: 5px;
+  margin-left: 35px;
+}
+
+.key-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid #2a1f18;
+  border-radius: 3px;
+  background: #f0e6d2;
+  font-size: 9px;
+  color: #2a1f18;
+}

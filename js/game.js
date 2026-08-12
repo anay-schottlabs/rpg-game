@@ -2,6 +2,7 @@
 
 const canvas = document.getElementById("game-canvas");
 const ctx = canvas.getContext("2d");
+const spellbookEl = document.getElementById("spellbook");
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -19,6 +20,7 @@ const keys = {
   d: false,
   shift: false,
   e: false,
+  q: false,
 };
 
 window.addEventListener("keydown", (e) => {
@@ -542,6 +544,10 @@ function loop(now) {
 
   player.update(dt);
   updateCamera();
+
+  // Quick-reference spellbook: only while actively casting, so it can't be
+  // pulled up as a free pause-and-read menu outside of that context.
+  spellbookEl.classList.toggle("visible", player.isCasting && keys.q);
 
   // Ease toward the cast zoom rather than snapping, so entering/leaving
   // spellcasting reads as a deliberate push-in rather than a jump cut.

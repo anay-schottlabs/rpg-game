@@ -4,11 +4,110 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Forest RPG</title>
+  <link href="https://fonts.googleapis.com/css2?family=Amatic+SC:wght@700&family=Nunito:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <div id="game-container">
     <canvas id="game-canvas"></canvas>
+
+    <div id="spellbook">
+      <div class="spellbook-page spellbook-page-left">
+        <h2 class="spellbook-title">Spellbook</h2>
+        <svg class="spellbook-flourish" width="100" height="10" viewBox="0 0 100 10">
+          <path d="M5,5 Q25,0 50,5 Q75,10 95,5" stroke="#2a1f18" stroke-width="1.5" fill="none"/>
+        </svg>
+
+        <div class="spell-entry">
+          <div class="spell-header">
+            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><polygon points="16,4 28,11 28,25 16,32 4,25 4,11" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/></svg>
+            <div>
+              <div class="spell-name">Stoneskin</div>
+              <div class="spell-school">Earth</div>
+            </div>
+          </div>
+          <div class="spell-combo">
+            <span class="key-chip">↑</span>
+            <span class="key-chip">→</span>
+            <span class="key-chip">↓</span>
+          </div>
+        </div>
+
+        <div class="spell-entry">
+          <div class="spell-header">
+            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M16,4 C22,14 26,20 26,24 C26,29 21,32 16,32 C11,32 6,29 6,24 C6,20 10,14 16,4 Z" fill="#4a7a7a" stroke="#2a1f18" stroke-width="2"/></svg>
+            <div>
+              <div class="spell-name">Tide Call</div>
+              <div class="spell-school">Water</div>
+            </div>
+          </div>
+          <div class="spell-combo">
+            <span class="key-chip">←</span>
+            <span class="key-chip">↑</span>
+            <span class="key-chip">↑</span>
+            <span class="key-chip">→</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="spellbook-spine">
+        <div class="spellbook-hinge spellbook-hinge-top"></div>
+        <div class="spellbook-hinge spellbook-hinge-bottom"></div>
+      </div>
+
+      <div class="spellbook-page spellbook-page-right">
+        <div class="spell-entry">
+          <div class="spell-header">
+            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M16,4 Q22,14 18,20 Q24,18 22,26 Q20,32 16,32 Q10,30 9,24 Q8,18 13,14 Q12,10 16,4 Z" fill="#c9622f" stroke="#2a1f18" stroke-width="2"/></svg>
+            <div>
+              <div class="spell-name">Ember Burst</div>
+              <div class="spell-school">Fire</div>
+            </div>
+          </div>
+          <div class="spell-combo">
+            <span class="key-chip">→</span>
+            <span class="key-chip">↓</span>
+            <span class="key-chip">←</span>
+            <span class="key-chip">↑</span>
+            <span class="key-chip">→</span>
+          </div>
+        </div>
+
+        <div class="spell-entry">
+          <div class="spell-header">
+            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><path d="M6,16 Q6,6 16,6 Q26,6 26,16 Q26,22 20,22 Q16,22 16,18" fill="none" stroke="#7fa8a8" stroke-width="3" stroke-linecap="round"/></svg>
+            <div>
+              <div class="spell-name">Gale Step</div>
+              <div class="spell-school">Wind</div>
+            </div>
+          </div>
+          <div class="spell-combo">
+            <span class="key-chip">↑</span>
+            <span class="key-chip">←</span>
+            <span class="key-chip">→</span>
+            <span class="key-chip">↓</span>
+            <span class="key-chip">↓</span>
+            <span class="key-chip">↑</span>
+          </div>
+        </div>
+
+        <div class="spell-entry">
+          <div class="spell-header">
+            <svg class="spell-icon" width="26" height="26" viewBox="0 0 32 32"><polygon points="16,4 28,11 28,25 16,32 4,25 4,11" fill="#8a8478" stroke="#2a1f18" stroke-width="2"/></svg>
+            <div>
+              <div class="spell-name">Rockfall</div>
+              <div class="spell-school">Earth</div>
+            </div>
+          </div>
+          <div class="spell-combo">
+            <span class="key-chip">↓</span>
+            <span class="key-chip">↓</span>
+            <span class="key-chip">→</span>
+            <span class="key-chip">↑</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="js/assets.js"></script>
