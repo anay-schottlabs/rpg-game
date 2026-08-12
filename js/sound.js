@@ -60,65 +60,7 @@ const Sound = (() => {
 
   const CAST_FREQ_BY_ELEMENT = { fire: 520, water: 380, earth: 220, wind: 660 };
 
-  // --- Continuous walking rustle ---------------------------------------
-  //
-  // A single looping noise source, filtered down to a soft rustle, whose
-  // gain fades in while the player is actually moving and fades back to
-  // silence when they stop — a continuous ambient texture ("grass moving
-  // underfoot") rather than a discrete sound replayed on a timer. Built
-  // once and reused for the whole session; setWalking() just automates its
-  // gain, so starting/stopping never clicks or restarts the loop.
-  const WALK_TARGET_GAIN = 0.02;
-  const WALK_FADE_SECONDS = 0.25;
-  let walkNodes = null;
-  let walking = false;
-
-  function ensureWalkLoop() {
-    if (walkNodes) return walkNodes;
-    const ac = getCtx();
-
-    // ~1s of noise, looped — long enough that the loop point isn't audible
-    // at this filter setting and volume.
-    const bufferSize = ac.sampleRate;
-    const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-
-    const src = ac.createBufferSource();
-    src.buffer = buffer;
-    src.loop = true;
-
-    // Bandpass rather than lowpass: cuts both the rumble and the hiss,
-    // leaving a light, papery rustle instead of a wash of noise.
-    const filter = ac.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.value = 1800;
-    filter.Q.value = 0.7;
-
-    const gainNode = ac.createGain();
-    gainNode.gain.value = 0;
-
-    src.connect(filter).connect(gainNode).connect(ac.destination);
-    src.start();
-
-    walkNodes = { gainNode };
-    return walkNodes;
-  }
-
   const api = {
-    // Called every frame with whether the local player is currently
-    // actually displacing (not just holding a movement key — see
-    // Player.update() in game.js). Cheap to call repeatedly; only touches
-    // the audio graph on an actual walking/stopped transition.
-    setWalking(isWalking) {
-      if (isWalking === walking) return;
-      walking = isWalking;
-      const { gainNode } = ensureWalkLoop();
-      const ac = getCtx();
-      gainNode.gain.cancelScheduledValues(ac.currentTime);
-      gainNode.gain.setValueAtTime(gainNode.gain.value, ac.currentTime);
-      gainNode.gain.linearRampToValueAtTime(isWalking ? WALK_TARGET_GAIN : 0, ac.currentTime + WALK_FADE_SECONDS);
-    },
     cast(element) {
       const base = CAST_FREQ_BY_ELEMENT[element] || 440;
       tone({ freq: base, freqEnd: base * 1.6, duration: 0.26, type: "triangle", gain: 0.05 });
