@@ -26,19 +26,39 @@ function randomRoomCode(length = 5) {
   return code;
 }
 
+// This version of Trystero's makeAction() returns a single
+// { send(payload, {target, metadata}), onMessage } object rather than the
+// older [send, receive] tuple, and delivers the sender's peerId via a
+// { peerId, ...metadata } object instead of a plain second argument. Adapt
+// that back to the [sendX, onX(cb)] / (payload, peerId) shape every other
+// multiplayer module here already expects, so only this file needs to know
+// about the new API surface.
+function wrapAction(action) {
+  const send = (payload, targetPeerId) =>
+    action.send(payload, targetPeerId !== undefined ? { target: targetPeerId } : undefined);
+  const on = (cb) => {
+    action.onMessage = (payload, meta) => cb(payload, meta?.peerId);
+  };
+  return [send, on];
+}
+
 // Wraps a raw Trystero room into the flat handle shape every other
 // multiplayer module uses, so nobody else needs to know Trystero's
 // makeAction/onPeerJoin API shapes directly.
 function buildHandle(code, trysteroRoom) {
-  const [sendInput, onInput] = trysteroRoom.makeAction("input");
-  const [sendState, onState] = trysteroRoom.makeAction("state");
-  const [sendSeed, onSeed] = trysteroRoom.makeAction("seed");
+  const [sendInput, onInput] = wrapAction(trysteroRoom.makeAction("input"));
+  const [sendState, onState] = wrapAction(trysteroRoom.makeAction("state"));
+  const [sendSeed, onSeed] = wrapAction(trysteroRoom.makeAction("seed"));
 
   return {
     code,
     selfId,
-    onPeerJoin: trysteroRoom.onPeerJoin,
-    onPeerLeave: trysteroRoom.onPeerLeave,
+    // trysteroRoom.onPeerJoin/onPeerLeave are setter properties in this
+    // Trystero version (assign a callback directly), not functions that
+    // take a callback — adapt to the callback-function shape every
+    // consumer here uses.
+    onPeerJoin: (cb) => { trysteroRoom.onPeerJoin = cb; },
+    onPeerLeave: (cb) => { trysteroRoom.onPeerLeave = cb; },
     sendInput,
     onInput,
     sendState,
