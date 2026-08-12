@@ -3,6 +3,10 @@
 // stays a handful of script files with no binary assets to fetch or license.
 // Matches the hand-drawn, generated-on-the-fly feel of the SVG art in
 // js/assets.js: nothing is pre-rendered, it's all built from a formula.
+//
+// Kept deliberately quiet and understated throughout — these are ambient
+// texture, not alarms. Gains here are the whole mix's volume knob; if
+// something still feels loud, turn it down here rather than per-call-site.
 
 const Sound = (() => {
   let ctx = null;
@@ -18,9 +22,9 @@ const Sound = (() => {
   }
 
   // A single tone with a short exponential decay, optionally sweeping from
-  // `freq` to `freqEnd` — the building block for most cues below (casts,
-  // hits, UI beeps). `type` is any OscillatorNode waveform.
-  function tone({ freq, duration, type = "sine", gain = 0.15, freqEnd, attack = 0.005 }) {
+  // `freq` to `freqEnd` — the building block for most one-shot cues below
+  // (casts, hits, UI beeps). `type` is any OscillatorNode waveform.
+  function tone({ freq, duration, type = "sine", gain = 0.06, freqEnd, attack = 0.005 }) {
     const ac = getCtx();
     const osc = ac.createOscillator();
     const gainNode = ac.createGain();
@@ -35,9 +39,9 @@ const Sound = (() => {
     osc.stop(ac.currentTime + duration + 0.02);
   }
 
-  // A short burst of filtered white noise — footsteps, impacts, anything
-  // percussive rather than tonal.
-  function noiseBurst({ duration, gain = 0.15, filterFreq = 1200, filterType = "lowpass" }) {
+  // A short burst of filtered white noise — impacts, anything percussive
+  // rather than tonal.
+  function noiseBurst({ duration, gain = 0.06, filterFreq = 1200, filterType = "lowpass" }) {
     const ac = getCtx();
     const bufferSize = Math.max(1, Math.floor(ac.sampleRate * duration));
     const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
@@ -56,46 +60,101 @@ const Sound = (() => {
 
   const CAST_FREQ_BY_ELEMENT = { fire: 520, water: 380, earth: 220, wind: 660 };
 
+  // --- Continuous walking rustle ---------------------------------------
+  //
+  // A single looping noise source, filtered down to a soft rustle, whose
+  // gain fades in while the player is actually moving and fades back to
+  // silence when they stop — a continuous ambient texture ("grass moving
+  // underfoot") rather than a discrete sound replayed on a timer. Built
+  // once and reused for the whole session; setWalking() just automates its
+  // gain, so starting/stopping never clicks or restarts the loop.
+  const WALK_TARGET_GAIN = 0.02;
+  const WALK_FADE_SECONDS = 0.25;
+  let walkNodes = null;
+  let walking = false;
+
+  function ensureWalkLoop() {
+    if (walkNodes) return walkNodes;
+    const ac = getCtx();
+
+    // ~1s of noise, looped — long enough that the loop point isn't audible
+    // at this filter setting and volume.
+    const bufferSize = ac.sampleRate;
+    const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+    const src = ac.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+
+    // Bandpass rather than lowpass: cuts both the rumble and the hiss,
+    // leaving a light, papery rustle instead of a wash of noise.
+    const filter = ac.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 1800;
+    filter.Q.value = 0.7;
+
+    const gainNode = ac.createGain();
+    gainNode.gain.value = 0;
+
+    src.connect(filter).connect(gainNode).connect(ac.destination);
+    src.start();
+
+    walkNodes = { gainNode };
+    return walkNodes;
+  }
+
   const api = {
-    footstep() {
-      noiseBurst({ duration: 0.055, gain: 0.045, filterFreq: 450 });
+    // Called every frame with whether the local player is currently
+    // actually displacing (not just holding a movement key — see
+    // Player.update() in game.js). Cheap to call repeatedly; only touches
+    // the audio graph on an actual walking/stopped transition.
+    setWalking(isWalking) {
+      if (isWalking === walking) return;
+      walking = isWalking;
+      const { gainNode } = ensureWalkLoop();
+      const ac = getCtx();
+      gainNode.gain.cancelScheduledValues(ac.currentTime);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, ac.currentTime);
+      gainNode.gain.linearRampToValueAtTime(isWalking ? WALK_TARGET_GAIN : 0, ac.currentTime + WALK_FADE_SECONDS);
     },
     cast(element) {
       const base = CAST_FREQ_BY_ELEMENT[element] || 440;
-      tone({ freq: base, freqEnd: base * 1.6, duration: 0.28, type: "triangle", gain: 0.12 });
+      tone({ freq: base, freqEnd: base * 1.6, duration: 0.26, type: "triangle", gain: 0.05 });
     },
     dash() {
-      tone({ freq: 700, freqEnd: 1100, duration: 0.15, type: "sine", gain: 0.1 });
+      tone({ freq: 700, freqEnd: 1100, duration: 0.14, type: "sine", gain: 0.045 });
     },
     enemyAttackWindup() {
-      tone({ freq: 180, freqEnd: 260, duration: 0.2, type: "sawtooth", gain: 0.07 });
+      tone({ freq: 180, freqEnd: 260, duration: 0.18, type: "sawtooth", gain: 0.03 });
     },
     enemyHitPlayer() {
-      noiseBurst({ duration: 0.12, gain: 0.16, filterFreq: 900 });
-      tone({ freq: 140, duration: 0.15, type: "square", gain: 0.09 });
+      noiseBurst({ duration: 0.1, gain: 0.06, filterFreq: 900 });
+      tone({ freq: 140, duration: 0.13, type: "square", gain: 0.035 });
     },
     enemyTakeDamage() {
-      tone({ freq: 900, freqEnd: 300, duration: 0.12, type: "square", gain: 0.09 });
+      tone({ freq: 900, freqEnd: 300, duration: 0.1, type: "square", gain: 0.035 });
     },
     enemyDeath() {
-      tone({ freq: 300, freqEnd: 60, duration: 0.5, type: "sawtooth", gain: 0.14 });
+      tone({ freq: 300, freqEnd: 60, duration: 0.45, type: "sawtooth", gain: 0.05 });
     },
     heal() {
-      tone({ freq: 500, freqEnd: 900, duration: 0.4, type: "sine", gain: 0.1 });
+      tone({ freq: 500, freqEnd: 900, duration: 0.35, type: "sine", gain: 0.04 });
     },
     menuOpen() {
-      tone({ freq: 440, freqEnd: 660, duration: 0.12, type: "triangle", gain: 0.08 });
+      tone({ freq: 440, freqEnd: 660, duration: 0.1, type: "triangle", gain: 0.03 });
     },
     menuClose() {
-      tone({ freq: 660, freqEnd: 440, duration: 0.12, type: "triangle", gain: 0.08 });
+      tone({ freq: 660, freqEnd: 440, duration: 0.1, type: "triangle", gain: 0.03 });
     },
     // Earth Breaker: a low crunch per shattered rock/tree, pitched slightly
     // up each step down the chain so a domino run reads as an ascending run
     // of crunches rather than the same hit repeated.
     earthShatter(chainIndex = 0) {
       const pitch = 1 + Math.min(chainIndex, 8) * 0.06;
-      noiseBurst({ duration: 0.16, gain: 0.16, filterFreq: 700 * pitch, filterType: "lowpass" });
-      tone({ freq: 110 * pitch, freqEnd: 50 * pitch, duration: 0.22, type: "sawtooth", gain: 0.11 });
+      noiseBurst({ duration: 0.14, gain: 0.06, filterFreq: 700 * pitch, filterType: "lowpass" });
+      tone({ freq: 110 * pitch, freqEnd: 50 * pitch, duration: 0.2, type: "sawtooth", gain: 0.045 });
     },
   };
 

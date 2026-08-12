@@ -861,7 +861,6 @@ function drawHealingPools(camera) {
 // --- Player movement & rendering (shared with multiplayer) -----------------
 
 const PLAYER_BASE_SPEED = 220; // pixels per second
-const FOOTSTEP_DISTANCE = 42; // px walked between footstep sounds
 // Gust Step (design doc's Movement Abilities section) — cast like any other
 // spell (see SPELLS below); castGustStep() just arms this burst rather than
 // it triggering off a held movement key.
@@ -992,7 +991,6 @@ class Player {
     this.isCasting = false;
     this.maxHealth = 100;
     this.health = 100;
-    this.footstepDist = 0; // distance walked since the last footstep sound
   }
 
   takeDamage(amount) {
@@ -1013,14 +1011,11 @@ class Player {
     const prevY = this.y;
     simulatePlayerMovement(this, input, dt);
 
-    // Footsteps: one every FOOTSTEP_DISTANCE of actual travel, regardless of
-    // dt — ties the cue to distance covered rather than a fixed timer so it
-    // doesn't fire while blocked against water/an obstacle.
-    this.footstepDist += Math.hypot(this.x - prevX, this.y - prevY);
-    if (this.footstepDist >= FOOTSTEP_DISTANCE) {
-      this.footstepDist = 0;
-      Sound.footstep();
-    }
+    // Drives the continuous walking rustle (see Sound.setWalking) off
+    // actual displacement, not just held input — stays silent while
+    // blocked against water/an obstacle even if a movement key is held.
+    const moved = Math.hypot(this.x - prevX, this.y - prevY) > 0.01;
+    Sound.setWalking(moved);
   }
 
   draw(ctx, camera) {
@@ -2621,6 +2616,11 @@ function loop(now) {
     } else if (inCampfireRange) {
       lobbyEl.classList.remove("lobby-hidden");
       Sound.menuOpen();
+      // Player.update() (which drives the walking rustle) stops running
+      // while the menu is open — without this, the rustle would keep
+      // looping at whatever gain it was mid-fade to if the menu opened
+      // while the player was still moving.
+      Sound.setWalking(false);
     }
   } else if (menuOpenBefore && keys.escape) {
     lobbyEl.classList.add("lobby-hidden");
