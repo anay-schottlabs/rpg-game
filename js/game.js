@@ -1144,7 +1144,12 @@ function drawPlayerLike(ctx, camera, state) {
 // drawPlayerLike() above; syncing hasWeapon/swing state over multiplayer
 // isn't wired up yet.
 
-const PLAYER_RIG_SCALE = 0.19; // maps the rig's 200x320 local space onto the ~28px-wide player
+// Maps the rig's 200x320 local space onto screen pixels — picked jointly
+// with NPC_DISPLAY_SCALE below (see generateVillage()) so the player and a
+// standing NPC read as roughly the same height next to each other; NPCs
+// are drawn from flat 92x131-ish source art at their own native scale, so
+// without deliberately reconciling the two here they don't match by default.
+const PLAYER_RIG_SCALE = 0.28;
 
 function playerLocalToWorld(local, state, flip) {
   const anchor = ForestAssets.playerRig.groundAnchor;
@@ -2658,6 +2663,13 @@ const VILLAGE_TREE_RING_ROWS = [
 
 let village = null;
 
+// NPC source art (ForestAssets.npcs, ~92x131px for the trainer sprite) is
+// drawn much taller than the player rig at PLAYER_RIG_SCALE reads on
+// screen — see that constant's comment. Scaled down here, at placement,
+// rather than by shrinking the source art, since npcMeta's width/height
+// also double as its groundFraction anchor math in drawGroundSprite().
+const NPC_DISPLAY_SCALE = 0.65;
+
 function generateVillage() {
   const rng = createVillageRng(20260812); // fixed seed — identical layout every time
   const renderGrid = WorldGen.createBucketGrid(400);
@@ -2667,7 +2679,7 @@ function generateVillage() {
     x: VILLAGE_CENTER.x + def.x,
     y: VILLAGE_CENTER.y + def.y,
     kind: def.kind,
-    scale: 1,
+    scale: NPC_DISPLAY_SCALE,
     flip: false,
   }));
 
