@@ -743,6 +743,26 @@ const DASH_SPEED_MULTIPLIER = 2.6;
 const DASH_DURATION = 0.18; // seconds the burst itself lasts
 const CAST_SPEED_MULTIPLIER = 0.12; // drastic slowdown while channeling a spell
 
+// Axis-separated collision against water and spell-created obstacles: try
+// each axis independently so moving into one at an angle slides along it
+// instead of stopping dead, but crossing it is never possible. Shared by
+// the per-frame movement below and Gust Step's instant displacement.
+function moveWithCollision(state, dx, dy, dist) {
+  const newX = state.x + dx * dist;
+  const newY = state.y + dy * dist;
+  if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y)) state.x = newX;
+  if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY)) state.y = newY;
+}
+
+function clampToWorld(state) {
+  const dist = distFromCenter(state.x, state.y);
+  if (dist > PLAYER_MAX_RADIUS) {
+    const scale = PLAYER_MAX_RADIUS / dist;
+    state.x = WORLD_CENTER.x + (state.x - WORLD_CENTER.x) * scale;
+    state.y = WORLD_CENTER.y + (state.y - WORLD_CENTER.y) * scale;
+  }
+}
+
 // Pure movement step used by both the local Player class below AND, in
 // multiplayer, js/multiplayer/host-sim.js — which drives every remote
 // player through this exact same function every frame so movement rules
@@ -764,32 +784,26 @@ function simulatePlayerMovement(state, input, dt) {
     state.facingX = dx;
     state.facingY = dy;
 
-    let speed = state.dashTimeLeft > 0 ? PLAYER_BASE_SPEED * DASH_SPEED_MULTIPLIER : PLAYER_BASE_SPEED;
-    if (state.isCasting) speed = PLAYER_BASE_SPEED * CAST_SPEED_MULTIPLIER;
-
-    // Axis-separated collision against water and spell-created obstacles:
-    // try each axis independently so walking into one at an angle slides
-    // along it instead of stopping dead, but crossing it is never possible.
-    const newX = state.x + dx * speed * dt;
-    const newY = state.y + dy * speed * dt;
-    if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y)) state.x = newX;
-    if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY)) state.y = newY;
+    const speed = state.isCasting ? PLAYER_BASE_SPEED * CAST_SPEED_MULTIPLIER : PLAYER_BASE_SPEED;
+    moveWithCollision(state, dx, dy, speed * dt);
   }
 
-  const dist = distFromCenter(state.x, state.y);
-  if (dist > PLAYER_MAX_RADIUS) {
-    const scale = PLAYER_MAX_RADIUS / dist;
-    state.x = WORLD_CENTER.x + (state.x - WORLD_CENTER.x) * scale;
-    state.y = WORLD_CENTER.y + (state.y - WORLD_CENTER.y) * scale;
-  }
+  clampToWorld(state);
 }
 window.simulatePlayerMovement = simulatePlayerMovement; // bridge for host-sim.js
 
-// Gust Step's cast effect — just arms the speed burst that
-// simulatePlayerMovement above already knows how to apply and that
-// drawPlayerLike below already knows how to render.
+// Gust Step's cast effect — an immediate burst of travel in the player's
+// current facing direction. Applied as a one-shot displacement (not a
+// timed speed multiplier) so it always actually moves you the instant it's
+// cast, regardless of whether a movement key happens to be held right then
+// — casting itself locks you in place, so you're rarely still holding one.
+// dashTimeLeft is kept only to drive the streak fade and the isDashing flag
+// broadcast in multiplayer.
+const DASH_DISTANCE = PLAYER_BASE_SPEED * DASH_SPEED_MULTIPLIER * DASH_DURATION;
 function castGustStep() {
   player.dashTimeLeft = DASH_DURATION;
+  moveWithCollision(player, player.facingX, player.facingY, DASH_DISTANCE);
+  clampToWorld(player);
 }
 
 // Shared visual for any player-shaped thing: the local player, or a remote
