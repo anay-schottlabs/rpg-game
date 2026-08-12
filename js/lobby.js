@@ -10,6 +10,7 @@ const JOIN_TIMEOUT_MS = 15000;
 
 const lobbyEl = document.getElementById("lobby");
 const closeBtn = document.getElementById("lobby-close-btn");
+const returnVillageBtn = document.getElementById("lobby-return-village-btn");
 const hostBtn = document.getElementById("lobby-host-btn");
 const joinBtn = document.getElementById("lobby-join-btn");
 const joinInput = document.getElementById("lobby-join-code");
@@ -108,6 +109,14 @@ joinBtn.addEventListener("click", async () => {
 });
 
 closeBtn.addEventListener("click", closeMenu);
+
+// Only visible while out in the wide world (game.js toggles that when the
+// menu opens — see currentArea in the F-handling there); game.js also owns
+// the actual teleport since it's the one that knows the village's spawn
+// point.
+returnVillageBtn.addEventListener("click", () => {
+  window.transitionToVillage();
+});
 
 joinInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") joinBtn.click();

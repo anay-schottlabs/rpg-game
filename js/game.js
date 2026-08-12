@@ -16,6 +16,16 @@ const castPipEls = {
   down: document.getElementById("cast-pip-down"),
   left: document.getElementById("cast-pip-left"),
 };
+const interactPromptEl = document.getElementById("interact-prompt");
+const dialoguePanelEl = document.getElementById("dialogue-panel");
+const dialoguePortraitEl = document.getElementById("dialogue-portrait");
+const dialogueNameEl = document.getElementById("dialogue-name");
+const dialogueTextEl = document.getElementById("dialogue-text");
+const bossHealthBarEl = document.getElementById("boss-health-bar");
+const bossHealthFillEl = document.getElementById("boss-health-fill");
+const bossHealthSheenEl = document.getElementById("boss-health-sheen");
+const bossHealthNameEl = document.getElementById("boss-health-name");
+const lobbyReturnVillageBtn = document.getElementById("lobby-return-village-btn");
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -102,6 +112,62 @@ window.addEventListener("blur", () => {
   qWasPressed = false;
 });
 
+// --- Progression (spell unlocks) --------------------------------------------
+
+// Nothing is castable until an NPC (or a boss) grants it — the Spawn Hub is
+// where that happens (see "--- Spawn Hub (Village) ---" below). Persisted
+// across sessions in localStorage since the village and this progress are
+// meant to be a standing home base, not something reset by a page reload.
+const UNLOCK_STORAGE_KEY = "rpgGameUnlockedSpells";
+// The Trainer grants this one specifically (it's also what breaks the
+// village's own boundary open — see castEarthBreaker()'s gate-tree
+// handling). The Range Master grants the rest of this list together.
+// Gust Step is deliberately absent — it's the Crystal Golem's reward.
+const TRAINER_SPELL = "Earth Breaker";
+const RANGE_MASTER_SPELLS = ["Stoneskin", "Tide Call", "Ember Burst", "Gale Step", "Rockfall"];
+const BOSS_REWARD_SPELL = "Gust Step";
+
+let unlockedSpells = new Set();
+try {
+  unlockedSpells = new Set(JSON.parse(localStorage.getItem(UNLOCK_STORAGE_KEY) || "[]"));
+} catch {
+  unlockedSpells = new Set();
+}
+
+function persistUnlocks() {
+  try {
+    localStorage.setItem(UNLOCK_STORAGE_KEY, JSON.stringify([...unlockedSpells]));
+  } catch {
+    // Private browsing / storage disabled — unlocks just won't persist
+    // across a reload this session, which is a harmless degradation.
+  }
+}
+
+// Idempotent — safe to call every time an NPC's dialogue completes, a duel
+// is won, or a boss falls, even if the player already has it.
+function unlockSpell(name) {
+  if (unlockedSpells.has(name)) return;
+  unlockedSpells.add(name);
+  persistUnlocks();
+  updateSpellbookLockState();
+  flashSigil(SPELLS.find((s) => s.name === name)?.element || "earth");
+  Sound.heal(); // reuse the warm "gained something" chime — no dedicated unlock sound yet
+  // Safe to call before the village/duel even exist yet — just updates the
+  // ENEMY_TYPES stats maybeSpawnDuelists()/killEnemy() read from later.
+  rescaleDuelistDifficulty();
+}
+
+// Dims each spellbook entry whose spell isn't unlocked yet and hides its
+// combo — matched by the spell's displayed name text since the spellbook is
+// static markup (see the SPELLS comment above). Called once at startup and
+// again every time unlockSpell() actually grants something.
+function updateSpellbookLockState() {
+  for (const entry of document.querySelectorAll(".spell-entry")) {
+    const name = entry.querySelector(".spell-name")?.textContent.trim();
+    entry.classList.toggle("locked", name && !unlockedSpells.has(name));
+  }
+}
+
 // --- Spellcasting ------------------------------------------------------------
 
 // Same combos shown in the spellbook UI (index.html) — kept in sync with it
@@ -147,7 +213,7 @@ function startCasting() {
 function stopCasting() {
   castingRingEl.classList.remove("visible");
   const cast = SPELLS.find(
-    (s) => s.combo.length === castSequence.length && s.combo.every((dir, i) => dir === castSequence[i])
+    (s) => unlockedSpells.has(s.name) && s.combo.length === castSequence.length && s.combo.every((dir, i) => dir === castSequence[i])
   );
   if (cast) {
     flashSigil(cast.element);
@@ -234,6 +300,23 @@ const WALL_START = 12900; // the dense boundary forest begins here
 const WALL_END = 19800; // extends well past WORLD_RADIUS so wide screens never see past it
 
 const CAMPFIRE_INTERACT_RADIUS = 130; // how close the player must be to open the menu with F — wide enough that the player spawns inside it, so the prompt is visible immediately
+
+// The Spawn Hub — a small, hand-authored, non-random village (see
+// "--- Spawn Hub (Village) ---" below) the player starts in and can always
+// return to, completely separate from the huge procedural world. Placed far
+// outside the world's own coordinate range purely so the two can never
+// numerically overlap — every system that cares which area is active reads
+// `currentArea` rather than relying on position alone.
+const VILLAGE_CENTER = { x: 100000, y: 100000 };
+const VILLAGE_RADIUS = 900; // movement clamp — the ring of boundary trees sits just past this
+
+// Known v1 simplification (same spirit as the golems being local-only): this
+// is the LOCAL player's area. simulatePlayerMovement()/clampToWorld() are
+// also what drives every remote player in multiplayer (see host-sim.js), so
+// while the host is in the village every remote player is clamped to the
+// village's small radius too, regardless of their own area. Multiplayer
+// across two different areas at once isn't supported yet.
+let currentArea = "village"; // "village" | "world"
 
 function distFromCenter(x, y) {
   return Math.hypot(x - WORLD_CENTER.x, y - WORLD_CENTER.y);
@@ -669,6 +752,13 @@ function collectEarthAssets() {
   for (const item of biomeFoliage) {
     if (!item.destroyed && (item.type === "scree" || item.type === "stalagmite")) list.push({ kind: "biomeFoliage", item });
   }
+  // The Sanctuary's boundary gate — same spell, same shatter/chain
+  // mechanic, breaking the one path out open. See generateVillage().
+  if (currentArea === "village" && village) {
+    for (const item of village.gateTrees) {
+      if (!item.destroyed) list.push({ kind: "gateTree", item });
+    }
+  }
   return list;
 }
 
@@ -681,8 +771,18 @@ function explodeEarthAsset(entry, chainIndex) {
   entry.item.destroyed = true;
   const x = entry.item.x;
   const y = entry.item.y;
-  spawnEffect(x, y, "earthImpact", 0.45, entry.item.scale * 1.3);
+  const isGateTree = entry.kind === "gateTree";
+  spawnEffect(x, y, isGateTree ? "earthCrush" : "earthImpact", 0.45, (entry.item.scale || 1) * (isGateTree ? 1.8 : 1.3));
   Sound.earthShatter(chainIndex);
+
+  if (isGateTree) {
+    // Break the matching collision blocker too — see generateVillage(),
+    // which placed one obstacle per gate tree at the exact same point.
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const obs = obstacles[i];
+      if (obs.kind === "villageGate" && Math.hypot(obs.x - x, obs.y - y) < 5) obstacles.splice(i, 1);
+    }
+  }
 
   for (const enemy of enemies) {
     if (enemy.state === "dead") continue;
@@ -880,11 +980,17 @@ function moveWithCollision(state, dx, dy, dist) {
 }
 
 function clampToWorld(state) {
-  const dist = distFromCenter(state.x, state.y);
-  if (dist > PLAYER_MAX_RADIUS) {
-    const scale = PLAYER_MAX_RADIUS / dist;
-    state.x = WORLD_CENTER.x + (state.x - WORLD_CENTER.x) * scale;
-    state.y = WORLD_CENTER.y + (state.y - WORLD_CENTER.y) * scale;
+  // Same shape as the open world's own boundary, just around whichever
+  // area's own center/radius is active — the village is a much smaller
+  // circle, and only local-only state (the local player) ever needs this,
+  // never remote players/host-sim, which only ever run in the open world.
+  const center = currentArea === "village" ? VILLAGE_CENTER : WORLD_CENTER;
+  const maxRadius = currentArea === "village" ? VILLAGE_RADIUS : PLAYER_MAX_RADIUS;
+  const dist = Math.hypot(state.x - center.x, state.y - center.y);
+  if (dist > maxRadius) {
+    const scale = maxRadius / dist;
+    state.x = center.x + (state.x - center.x) * scale;
+    state.y = center.y + (state.y - center.y) * scale;
   }
 }
 
@@ -1074,6 +1180,36 @@ const ENEMY_TYPES = {
     attackWindup: 0.4, attackCooldown: 1.4, attackDamage: 11, speed: 90,
     respawnMs: 17000, scale: 0.62, rig: ForestAssets.enemyRigs.crystalCrawler,
   },
+  // Boss Arenas' Crystal Golem — same rig shape as the regular golem, just
+  // a bigger local coordinate space (see crystalGolemRig) plus a somewhat
+  // bigger world scale, "a bit bigger than regular golem" per its brief.
+  // Everything else about it (aggro/leash/health/damage) lives on the
+  // instance itself, not here — see spawnCrystalGolem() — since a boss is a
+  // one-off, not a species with many interchangeable instances.
+  crystalGolem: {
+    displayName: "Crystal Golem", biomeId: "hollowDeep", family: "golem",
+    maxHealth: 600, aggroRadius: 620, leashRadius: 620, attackRange: 90,
+    attackWindup: 0.55, attackCooldown: 1.8, attackDamage: 16, speed: 85,
+    respawnMs: Infinity, scale: 0.62, rig: ForestAssets.enemyRigs.crystalGolem,
+  },
+  // The Spawn Hub's sparring duel — two "duelist" family enemies (static
+  // NPC sprite, lunges as a whole rather than an animated rig) spawned once
+  // the player has their first spell (see maybeSpawnDuelists()) right in
+  // the arena ring, with a small aggro/leash radius matching the ring
+  // itself so they only ever fight inside it. Stats are rescaled by
+  // rescaleDuelistDifficulty() every time the player learns something new.
+  chief: {
+    displayName: "Chief", biomeId: "village", family: "duelist", spriteKey: "chiefBattle",
+    maxHealth: 140, aggroRadius: 190, leashRadius: 260, attackRange: 60,
+    attackWindup: 0.35, attackCooldown: 1.1, attackDamage: 10, speed: 150,
+    respawnMs: 6000, scale: 1,
+  },
+  sparringPartner: {
+    displayName: "Sparring Partner", biomeId: "village", family: "duelist", spriteKey: "sparringPartner",
+    maxHealth: 100, aggroRadius: 190, leashRadius: 260, attackRange: 60,
+    attackWindup: 0.4, attackCooldown: 1.3, attackDamage: 8, speed: 140,
+    respawnMs: 6000, scale: 1,
+  },
 };
 
 let enemies = [];
@@ -1110,6 +1246,10 @@ function spawnEnemyGroup(kind, count, sample) {
     const p = sample();
     if (isPointInWater(p.x, p.y)) continue;
     if (enemies.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 140)) continue;
+    // Keep ordinary wandering enemies out of the Crystal Golem's arena —
+    // that fight is meant to start empty, not with a stray crystal crawler
+    // already inside.
+    if (bossArenaCenter && Math.hypot(p.x - bossArenaCenter.x, p.y - bossArenaCenter.y) < BOSS_ARENA_RADIUS + 200) continue;
     enemies.push(makeEnemy(kind, p.x, p.y));
     placed++;
   }
@@ -1142,9 +1282,16 @@ function updateEnemy(enemy, dt) {
   if (enemy.state === "attacking") {
     if (enemy.attackWindup > 0) {
       enemy.attackWindup -= dt;
-      if (enemy.attackWindup <= 0 && distToPlayer <= type.attackRange + 20) {
-        player.takeDamage(type.attackDamage);
-        Sound.enemyHitPlayer();
+      if (enemy.attackWindup <= 0) {
+        // The Crystal Golem cycles between three attacks (see
+        // resolveCrystalGolemAttack) instead of the single melee-range
+        // check every other enemy uses.
+        if (enemy.kind === "crystalGolem" && enemy.crystalAttackPattern !== "melee") {
+          resolveCrystalGolemAttack(enemy, distToPlayer);
+        } else if (distToPlayer <= type.attackRange + 20) {
+          player.takeDamage(type.attackDamage);
+          Sound.enemyHitPlayer();
+        }
       }
     }
     if (enemy.attackCooldown <= 0) {
@@ -1170,6 +1317,13 @@ function updateEnemy(enemy, dt) {
       enemy.facingX = (player.x - enemy.x) / (distToPlayer || 1);
       enemy.facingY = (player.y - enemy.y) / (distToPlayer || 1);
       Sound.enemyAttackWindup();
+      // "Give it plenty of attacks": cycles between a melee swing (the
+      // default every enemy already has), a ranged crystal-shard throw, and
+      // an AoE ground slam — see resolveCrystalGolemAttack().
+      if (enemy.kind === "crystalGolem") {
+        const r = RNG.random();
+        enemy.crystalAttackPattern = r < 0.4 ? "melee" : r < 0.7 ? "ranged" : "slam";
+      }
     } else {
       const dx = (player.x - enemy.x) / (distToPlayer || 1);
       const dy = (player.y - enemy.y) / (distToPlayer || 1);
@@ -1318,6 +1472,10 @@ function computeGolemAngles(enemy, type) {
   return angles;
 }
 
+// Shared by the regular Rock Golem and the bigger Crystal Golem boss (same
+// joint rig shape, see crystalGolemRig in assets.js) — golem-only fixed
+// decorations (sockets/moss/cracks) and boss-only ones (crystalShards/core/
+// headGem) are both optional so either rig works through this one function.
 function drawGolemEnemy(enemy, type, camera) {
   if (enemy.state === "dead") return;
 
@@ -1328,7 +1486,7 @@ function drawGolemEnemy(enemy, type, camera) {
   drawEnemyShadow(enemy, type, flip, camera);
 
   // Fixed decorations drawn first (they sit beneath/behind the moving segments).
-  for (const socket of rig.sockets) {
+  for (const socket of rig.sockets || []) {
     drawEnemyEllipse(socket, socket.rx, socket.ry, socket, 0, enemy, type, flip, camera, "#5f5a4f");
   }
 
@@ -1343,24 +1501,42 @@ function drawGolemEnemy(enemy, type, camera) {
 
   // Moss patches + glowing cracks over the torso, before the arms/head so
   // the limbs can overlap them naturally.
-  for (const moss of rig.moss) {
+  for (const moss of rig.moss || []) {
     drawEnemyEllipse(moss, moss.rx, moss.ry, torso.pivot, angles.torso, enemy, type, flip, camera, "#5c6b3f");
   }
   ctx.save();
   ctx.globalAlpha = 0.75;
-  for (const crack of rig.cracks) drawEnemyPathLine(crack, torso.pivot, angles.torso, enemy, type, flip, camera, "#c9622f", 2);
+  for (const crack of rig.cracks || []) drawEnemyPathLine(crack, torso.pivot, angles.torso, enemy, type, flip, camera, "#c9622f", 2);
   ctx.restore();
+
+  // Crystal Golem's shoulder/chest shard clusters, drawn with the torso.
+  for (const shard of rig.crystalShards || []) {
+    drawEnemyPolygon(shard.points, torso.pivot, angles.torso, enemy, type, flip, camera, "#9b7fc4");
+  }
 
   const armL = rig.groups.armL;
   const armR = rig.groups.armR;
   for (const key of armL.segments) drawEnemyPolygon(rig.segments[key].points, armL.pivot, angles.armL, enemy, type, flip, camera, rig.segments[key].fill);
   for (const key of armR.segments) drawEnemyPolygon(rig.segments[key].points, armR.pivot, angles.armR, enemy, type, flip, camera, rig.segments[key].fill);
 
+  // Crystal Golem's exposed weak-point core, on the torso before the head.
+  if (rig.core) {
+    const coreWorld = enemyLocalToWorld(rotateAround(rig.core, torso.pivot, angles.torso), enemy, type, flip);
+    ctx.beginPath();
+    ctx.arc(coreWorld.x - camera.x, coreWorld.y - camera.y, rig.core.r * type.scale, 0, Math.PI * 2);
+    ctx.fillStyle = "#8fe0ff";
+    ctx.globalAlpha = 0.55;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    drawEnemyPolygon(rig.core.diamond, torso.pivot, angles.torso, enemy, type, flip, camera, "#8fe0ff");
+  }
+
   const head = rig.groups.head;
   for (const key of head.segments) drawEnemyPolygon(rig.segments[key].points, head.pivot, angles.head, enemy, type, flip, camera, rig.segments[key].fill);
+  if (rig.headGem) drawEnemyPolygon(rig.headGem, head.pivot, angles.head, enemy, type, flip, camera, "#e8d8ff");
 
   // Eyes glow on top of the head.
-  ctx.fillStyle = "#e8a24a";
+  ctx.fillStyle = rig.core ? "#8fe0ff" : "#e8a24a"; // crystal palette vs. the regular golem's amber
   for (const eye of rig.eyes) {
     const rotated = angles.head ? rotateAround(eye, head.pivot, angles.head) : eye;
     const world = enemyLocalToWorld(rotated, enemy, type, flip);
@@ -1622,6 +1798,64 @@ function drawRadialLegsEnemy(enemy, type, camera) {
   drawEnemyHealthBar(enemy, type, flip, camera);
 }
 
+// --- Enemy family: duelist (static NPC sprite, no rig) --------------------
+// The Spawn Hub's Chief and sparring partner — humanoids drawn as a single
+// image (like an NPC) rather than an animated skeleton, with combat conveyed
+// through the whole sprite lunging/coiling instead of individual limbs.
+
+function drawDuelistEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const asset = ForestAssets.npcs[type.spriteKey];
+  const flip = enemy.facingX < 0;
+
+  const groundX = enemy.x - camera.x;
+  const groundY = enemy.y - camera.y;
+  ctx.beginPath();
+  ctx.ellipse(groundX, groundY, asset.width * type.scale * 0.28, asset.width * type.scale * 0.1, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+  ctx.fill();
+
+  let lungeX = 0;
+  let lungeY = 0;
+  let scale = 1;
+  if (enemy.state === "attacking") {
+    if (enemy.attackWindup > 0) {
+      const t = 1 - enemy.attackWindup / type.attackWindup;
+      scale = 1 - 0.06 * t; // coils back through the windup
+    } else {
+      const strikeDuration = type.attackCooldown - type.attackWindup;
+      const t = strikeDuration > 0 ? Math.min(1, 1 - Math.max(0, enemy.attackCooldown / strikeDuration)) : 1;
+      const lunge = Math.sin(t * Math.PI) * 22; // out and back over the strike
+      lungeX = enemy.facingX * lunge;
+      lungeY = enemy.facingY * lunge;
+      scale = 1 + 0.08 * Math.sin(t * Math.PI);
+    }
+  } else if (enemy.state === "chasing") {
+    scale = 1 + Math.sin(enemy.animPhase * 10) * 0.03; // a little bounce on approach
+  } else {
+    scale = 1 + Math.sin(enemy.animPhase * 1.6) * 0.012; // idle breathing
+  }
+
+  const width = asset.width * type.scale * scale;
+  const height = asset.height * type.scale * scale;
+
+  ctx.save();
+  ctx.translate(groundX + lungeX, groundY + lungeY);
+  if (flip) ctx.scale(-1, 1);
+  ctx.drawImage(asset.image, -width / 2, -height * asset.groundFraction, width, height);
+  ctx.restore();
+
+  if (enemy.health < type.maxHealth) {
+    const barX = groundX - 25;
+    const barY = groundY - asset.height * type.scale * asset.groundFraction - 14;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+    ctx.fillRect(barX, barY, 50, 6);
+    ctx.fillStyle = "#a63d3d";
+    ctx.fillRect(barX, barY, 50 * Math.max(0, enemy.health / type.maxHealth), 6);
+  }
+}
+
 // --- Dispatch --------------------------------------------------------------
 
 function drawEnemy(enemy, camera) {
@@ -1632,6 +1866,7 @@ function drawEnemy(enemy, camera) {
     case "segmentedChain": drawSegmentedChainEnemy(enemy, type, camera); break;
     case "floaty": drawFloatyEnemy(enemy, type, camera); break;
     case "radialLegs": drawRadialLegsEnemy(enemy, type, camera); break;
+    case "duelist": drawDuelistEnemy(enemy, type, camera); break;
   }
 }
 
@@ -1749,10 +1984,27 @@ function biomeFoliageFootprintRadius(item) {
   return ((ForestAssets.biomeFoliage[item.type].width * item.scale) / 2) * 0.6;
 }
 
+// The Crystal Golem's arena — a big clearing placed at a fixed depth in the
+// middle of the Hollow Deep sector (index 4 of OUTER_BIOMES; matches the
+// design doc's own "Boss — Crystal Golem (Hollow Deep)" placement). Computed
+// here, right after biomeBaseAngle, so the rest of generateBiomes() can
+// keep ordinary biome content from scattering into it (see pointWeight
+// below) — see spawnBossArena() further down for the arena furniture itself.
+const BOSS_ARENA_RADIUS = 560;
+let bossArenaCenter = null;
+
 function generateBiomes() {
   biomeBaseAngle = RNG.random() * Math.PI * 2;
   biomeTrees = [];
   biomeFoliage = [];
+
+  const hollowDeepIndex = OUTER_BIOMES.findIndex((b) => b.id === "hollowDeep");
+  const hollowDeepCenterAngle = biomeBaseAngle + (hollowDeepIndex + 0.5) * BIOME_SECTOR_SIZE;
+  const arenaDist = (BIOME_INNER_RADIUS + WALL_START) / 2;
+  bossArenaCenter = {
+    x: WORLD_CENTER.x + Math.cos(hollowDeepCenterAngle) * arenaDist,
+    y: WORLD_CENTER.y + Math.sin(hollowDeepCenterAngle) * arenaDist,
+  };
 
   const innerBlendStart = BIOME_INNER_RADIUS - GROVE_BLEND_WIDTH;
 
@@ -1771,6 +2023,7 @@ function generateBiomes() {
       const theta = angleNear(rawTheta, (angleStart + angleEnd) / 2);
       const angular = biomeAngularWeight(theta, angleStart, angleEnd);
       const radial = 1 - groveOuterFade(distFromCenter(x, y));
+      if (Math.hypot(x - bossArenaCenter.x, y - bossArenaCenter.y) < BOSS_ARENA_RADIUS + 150) return 0;
       return angular * radial;
     };
 
@@ -1994,6 +2247,76 @@ function drawProjectile(p, camera) {
   ctx.restore();
 }
 
+// --- Boss projectiles (Crystal Golem's ranged attack) -----------------------
+
+const CRYSTAL_SHARD_SPEED = 420;
+const CRYSTAL_SHARD_RANGE = 750;
+const CRYSTAL_SHARD_DAMAGE = 14;
+const CRYSTAL_SHARD_HIT_RADIUS = 34;
+const CRYSTAL_GOLEM_SLAM_RADIUS = 260;
+
+let bossProjectiles = [];
+
+// One of the Crystal Golem's three attacks (see the crystalAttackPattern
+// roll in updateEnemy) — the melee swing is just the ordinary per-enemy
+// check every other enemy already has, so only these two need bespoke
+// handling.
+function resolveCrystalGolemAttack(enemy, distToPlayer) {
+  if (enemy.crystalAttackPattern === "ranged") {
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+    const len = Math.hypot(dx, dy) || 1;
+    bossProjectiles.push({ x: enemy.x, y: enemy.y, vx: (dx / len) * CRYSTAL_SHARD_SPEED, vy: (dy / len) * CRYSTAL_SHARD_SPEED, traveled: 0 });
+  } else if (enemy.crystalAttackPattern === "slam") {
+    spawnEffect(enemy.x, enemy.y, "slamShardBurst", 0.5, 1.6);
+    Sound.earthShatter(0);
+    if (distToPlayer < CRYSTAL_GOLEM_SLAM_RADIUS) player.takeDamage(Math.round(ENEMY_TYPES.crystalGolem.attackDamage * 0.75));
+  }
+}
+
+function updateBossProjectiles(dt) {
+  for (let i = bossProjectiles.length - 1; i >= 0; i--) {
+    const p = bossProjectiles[i];
+    const stepX = p.vx * dt;
+    const stepY = p.vy * dt;
+    p.x += stepX;
+    p.y += stepY;
+    p.traveled += Math.hypot(stepX, stepY);
+
+    if (Math.hypot(p.x - player.x, p.y - player.y) < CRYSTAL_SHARD_HIT_RADIUS) {
+      player.takeDamage(CRYSTAL_SHARD_DAMAGE);
+      Sound.enemyHitPlayer();
+      spawnEffect(p.x, p.y, "coreShatter", 0.3, 0.6);
+      bossProjectiles.splice(i, 1);
+      continue;
+    }
+    if (p.traveled > CRYSTAL_SHARD_RANGE || isPointBlocked(p.x, p.y)) {
+      bossProjectiles.splice(i, 1);
+    }
+  }
+}
+
+function drawBossProjectile(p, camera) {
+  const screenX = p.x - camera.x;
+  const screenY = p.y - camera.y;
+  const angle = Math.atan2(p.vy, p.vx);
+  ctx.save();
+  ctx.translate(screenX, screenY);
+  ctx.rotate(angle);
+  ctx.fillStyle = "#8fe0ff";
+  ctx.strokeStyle = "#e8d8ff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(14, 0);
+  ctx.lineTo(0, -6);
+  ctx.lineTo(-10, 0);
+  ctx.lineTo(0, 6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 // --- One-shot spell effects ----------------------------------------------------
 
 let effects = [];
@@ -2014,14 +2337,14 @@ function drawEffect(effect, camera) {
   const screenX = effect.x - camera.x;
   const screenY = effect.y - camera.y;
 
-  if (effect.type === "fireImpact" || effect.type === "earthImpact") {
-    const asset = ForestAssets.spellEffects[effect.type];
+  const burstAsset = ForestAssets.spellEffects[effect.type] || ForestAssets.bossEffects[effect.type];
+  if (burstAsset) {
     const scale = (0.7 + t * 0.5) * (effect.scale || 1);
     ctx.save();
     ctx.globalAlpha = Math.max(0, 1 - t);
     ctx.translate(screenX, screenY);
     ctx.scale(scale, scale);
-    ctx.drawImage(asset.image, -asset.width / 2, -asset.height / 2, asset.width, asset.height);
+    ctx.drawImage(burstAsset.image, -burstAsset.width / 2, -burstAsset.height / 2, burstAsset.width, burstAsset.height);
     ctx.restore();
     return;
   }
@@ -2115,6 +2438,431 @@ function castWindExplosion() {
     enemy.attackWindup = 0;
   }
 }
+
+// --- Spawn Hub (Village) -----------------------------------------------------
+
+// A small, hand-authored, non-random home base — the player always starts
+// here (see startGame()) and can always return (see transitionToVillage()).
+// Doubles as the game's menu per the design brief: no buttons, just walk up
+// to whichever NPC teaches what you're after.
+//
+// Every position below is a fixed offset from VILLAGE_CENTER, placed by
+// hand — the only randomness is the boundary tree ring's natural scatter
+// look, which uses its own tiny seeded generator (never the shared RNG, so
+// re-seeding it for multiplayer never changes this layout) rather than a
+// hardcoded list of tree coordinates.
+function createVillageRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Linear (non-branching) NPC lines — pressing F advances one line at a
+// time; the last line closes the panel and, the first time through, runs
+// onComplete. Positions are offsets from VILLAGE_CENTER.
+const NPC_DEFS = [
+  {
+    id: "trainer", kind: "trainer", name: "Trainer", x: -220, y: -70,
+    lines: [
+      "Welcome, traveler. This is the Sanctuary — home, training ground, and about as close to a main menu as this world has.",
+      "Move with WASD. Hold Shift to ready a spell, tap the arrow keys shown on your Spellbook in order, then let go of Shift to cast it.",
+      "Here — I'll teach you Earth Breaker first. It crushes rock... and, conveniently, whatever's blocking that treeline to the east.",
+      "Press Q any time to reopen your Spellbook. The practice dummies past Range Master won't hit back — go on.",
+    ],
+    onComplete: () => unlockSpell(TRAINER_SPELL),
+  },
+  {
+    id: "rangeMaster", kind: "rangeMaster", name: "Range Master", x: 300, y: -110,
+    lines: [
+      "Trainer sent you my way? Good. Earth Breaker's a start, but you'll want more than one trick out there.",
+      "Stoneskin rings you with pillars. Rockfall drops a barricade ahead of you. Ember Burst throws fire. Tide Call draws healing water — or bridges ice, near other water. Gale Step knocks enemies back.",
+      "Take all five. Practice on the dummies until the combos feel like muscle memory, not memorization.",
+    ],
+    onComplete: () => { for (const s of RANGE_MASTER_SPELLS) unlockSpell(s); },
+  },
+  {
+    id: "bondsKeeper", kind: "bondsKeeper", name: "Bonds Keeper", x: 0, y: 280,
+    lines: [
+      "Want friends alongside you? Any campfire works — this one included. Press F near it.",
+      "Host a game and you'll get a room code. They open their own fire, press Join, and type it in.",
+      "Whatever world you explore together is whichever one the host's fire lit — so settle who's hosting before you wander off.",
+    ],
+  },
+  {
+    id: "merchant", kind: "merchant", name: "Merchant", x: -340, y: 140,
+    lines: [
+      "Wares? Ha — nothing worth selling yet. Come back once there's something worth trading.",
+      "Between us — the real prize out there is whatever the Crystal Golem's been guarding. Hollow Deep, if the rumors hold true.",
+    ],
+  },
+  {
+    id: "guard", kind: "guard", name: "Guard", x: 320, y: 50,
+    lines: [
+      "That treeline's grown in solid — long as I've stood post here, at least.",
+      "Learn something that can break rock and you'll cut your own way through, same as the rest of us did.",
+    ],
+  },
+  {
+    id: "fisher", kind: "fisher", name: "Fisher", x: -140, y: 360,
+    lines: [
+      "Quiet out here. Good for thinking.",
+      "You'll find rivers and ponds all through the wider world — some just for the view, some worth a closer look.",
+    ],
+  },
+  {
+    id: "reader", kind: "reader", name: "Reader", x: 170, y: 320,
+    lines: [
+      "This book's older than the Sanctuary. Mostly it just says: the forest keeps going, and it gets stranger the farther out you look.",
+      "Six regions past the Grove, by my count. Each with its own temperament — and its own local trouble.",
+    ],
+  },
+  {
+    id: "chief", kind: "chiefGreeting", name: "Chief", x: 520, y: -330,
+    lines: [
+      "You've got a spell to your name — I can see it on you.",
+      "Step into the ring whenever you're ready and I'll show you what a real fight costs. Nothing permanent, just bruises and a lesson.",
+      "The more you've learned by the time you challenge me, the harder I'll push back. Worth coming back after you've picked up something new.",
+    ],
+  },
+];
+
+const NPC_PORTRAIT_COLOR = {
+  trainer: "#6b5a8a", rangeMaster: "#5c6b3f", bondsKeeper: "#c9a24a", merchant: "#a9642f",
+  guard: "#6b7a8a", fisher: "#5c6b3f", reader: "#8a6bb0", chiefGreeting: "#a63d3d",
+};
+
+const VILLAGE_GATE_ANGLE = 0; // due "east" (+x) — the one way in or out
+const VILLAGE_GATE_HALF_WIDTH = 0.4; // radians
+const VILLAGE_RING_RADIUS = { min: 420, max: 830 };
+
+let village = null;
+
+function generateVillage() {
+  const rng = createVillageRng(20260812); // fixed seed — identical layout every time
+  const spatialIndex = WorldGen.createSpatialIndex(120);
+  const renderGrid = WorldGen.createBucketGrid(400);
+
+  const npcs = NPC_DEFS.map((def) => ({
+    def,
+    x: VILLAGE_CENTER.x + def.x,
+    y: VILLAGE_CENTER.y + def.y,
+    kind: def.kind,
+    scale: 1,
+    flip: false,
+  }));
+
+  const decor = [];
+  function place(category, kind, x, y, scale = 1, flip = false) {
+    decor.push({ category, kind, x: VILLAGE_CENTER.x + x, y: VILLAGE_CENTER.y + y, scale, flip });
+  }
+
+  place("hubFeatures", "targetDummy", 350, -190);
+  place("hubFeatures", "targetDummyBroken", 410, -150, 1, true);
+  place("hubFeatures", "scorchMark", 380, -120);
+  place("hubFeatures", "practiceRing", 360, -180, 1.1);
+  place("hubFeatures", "noticeBoard", 0, -340);
+  place("hubFeatures", "friendBeacon", -60, 320);
+  place("hubFeatures", "hut", -400, -70);
+  place("hubFeatures", "hut", -360, 240, 0.95, true);
+  place("hubFeatures", "lodge", 360, 240, 1.05);
+  place("hubFeatures", "arenaRing", 520, -330, 1.5);
+  place("npcDecor", "seatedVillager", -70, 180);
+  place("npcDecor", "villagersChatting", -280, 280, 1, true);
+
+  // Boundary tree ring — dense but with the gate's arc left fully clear for
+  // the dedicated destructible cluster below.
+  for (let i = 0; i < 320; i++) {
+    const angle = rng() * Math.PI * 2;
+    const angDiff = Math.abs(((angle - VILLAGE_GATE_ANGLE + Math.PI) % (Math.PI * 2)) - Math.PI);
+    if (angDiff < VILLAGE_GATE_HALF_WIDTH + 0.1) continue; // leave the gate's arc clear
+    const r = VILLAGE_RING_RADIUS.min + rng() * (VILLAGE_RING_RADIUS.max - VILLAGE_RING_RADIUS.min);
+    const x = VILLAGE_CENTER.x + Math.cos(angle) * r;
+    const y = VILLAGE_CENTER.y + Math.sin(angle) * r;
+    const types = ["common", "birch", "pine", "willow", "elder"];
+    const item = { x, y, type: types[Math.floor(rng() * types.length)], scale: 0.8 + rng() * 0.5 };
+    const radius = treeFootprintRadius(item);
+    if (spatialIndex.hasOverlap(x, y, radius, 0.85)) continue;
+    spatialIndex.insert(x, y, radius);
+    decor.push({ category: "tree", ...item });
+  }
+
+  // The gate — a small cluster of destructible trees blocking the one arc
+  // left open above, plus matching collision so it's genuinely impassable
+  // until Earth Breaker clears it (see collectEarthAssets()'s gateTree
+  // handling). If the player already had Earth Breaker from a previous
+  // session, the gate simply starts open.
+  const gateAlreadyOpen = unlockedSpells.has(TRAINER_SPELL);
+  const gateTrees = [];
+  for (let i = -2; i <= 2; i++) {
+    const angle = VILLAGE_GATE_ANGLE + (i / 2) * VILLAGE_GATE_HALF_WIDTH * 0.8;
+    const r = 640 + (Math.abs(i) % 2) * 70;
+    const x = VILLAGE_CENTER.x + Math.cos(angle) * r;
+    const y = VILLAGE_CENTER.y + Math.sin(angle) * r;
+    gateTrees.push({ x, y, type: "elder", scale: 1.15, destroyed: gateAlreadyOpen });
+    if (!gateAlreadyOpen) {
+      obstacles.push({ type: "circle", kind: "villageGate", x, y, radius: 75, expiresAt: Infinity });
+    }
+  }
+
+  for (const item of decor) {
+    renderGrid.insert(item.x, item.y, { y: item.y, kind: item.category, item });
+  }
+  for (const tree of gateTrees) {
+    renderGrid.insert(tree.x, tree.y, { y: tree.y, kind: "gateTree", item: tree });
+  }
+
+  village = {
+    npcs,
+    decor,
+    gateTrees,
+    campfire: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y, scale: 1, flip: false },
+    renderGrid,
+    spawnPoint: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y + 140 },
+    arenaCenter: { x: VILLAGE_CENTER.x + 520, y: VILLAGE_CENTER.y - 330 },
+    arenaRadius: 190,
+    duelSpawned: false,
+  };
+}
+
+function drawVillageGround() {
+  ctx.fillStyle = "#3f6b3f"; // a touch warmer than the wild forest's green
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawNpc(item, camera) {
+  drawGroundSprite(ForestAssets.npcs[item.kind], item, camera);
+}
+
+function drawHubFeature(item, camera) {
+  drawGroundSprite(ForestAssets.hubFeatures[item.kind], item, camera);
+}
+
+function drawGateTree(item, camera) {
+  if (item.destroyed) return; // shattered by Earth Breaker
+  drawTree(item, camera);
+}
+
+function drawVillage(camera, mp) {
+  drawVillageGround();
+
+  const drawables = [];
+  drawables.push({ y: village.campfire.y, kind: "campfire", item: village.campfire });
+  const viewHalfW = canvas.width / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
+  const viewHalfH = canvas.height / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
+  const viewCenterX = camera.x + canvas.width / 2;
+  const viewCenterY = camera.y + canvas.height / 2;
+  village.renderGrid.queryRect(viewCenterX - viewHalfW, viewCenterY - viewHalfH, viewCenterX + viewHalfW, viewCenterY + viewHalfH, drawables);
+  for (const npc of village.npcs) drawables.push({ y: npc.y, kind: "npc", item: npc });
+  for (const enemy of enemies) {
+    if (enemy.kind === "chief" || enemy.kind === "sparringPartner") drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
+  }
+  if (mp) {
+    for (const remote of mp.getRemotePlayers()) drawables.push({ y: remote.y, kind: "remote", item: remote });
+  }
+  drawables.push({ y: player.y, kind: "player", item: null });
+
+  drawables.sort((a, b) => a.y - b.y);
+  for (const d of drawables) {
+    switch (d.kind) {
+      case "tree": drawTree(d.item, camera); break;
+      case "gateTree": drawGateTree(d.item, camera); break;
+      case "hubFeatures": drawHubFeature(d.item, camera); break;
+      case "npcDecor": drawNpc(d.item, camera); break;
+      case "npc": drawNpc(d.item, camera); break;
+      case "campfire": drawCampfire(d.item, camera); break;
+      case "enemy": drawEnemy(d.item, camera); break;
+      case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
+      case "player": player.draw(ctx, camera); break;
+    }
+  }
+
+  drawObstacles(camera);
+  for (const effect of effects) drawEffect(effect, camera);
+}
+
+// --- NPC interaction & guided dialogue --------------------------------------
+
+const NPC_INTERACT_RADIUS = 90;
+const RUNE_INTERACT_RADIUS = 110;
+
+let activeDialogue = null; // { npc, lineIndex } | null
+
+function findNearestVillageNpc() {
+  if (!village) return null;
+  let best = null;
+  let bestDist = NPC_INTERACT_RADIUS;
+  for (const npc of village.npcs) {
+    const d = Math.hypot(player.x - npc.x, player.y - npc.y);
+    if (d < bestDist) {
+      best = npc;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function openDialogue(npc) {
+  activeDialogue = { npc, lineIndex: 0 };
+  dialoguePanelEl.classList.remove("hidden");
+  dialoguePortraitEl.style.background = NPC_PORTRAIT_COLOR[npc.def.kind] || "#8a7a68";
+  dialogueNameEl.textContent = npc.def.name;
+  dialogueTextEl.textContent = npc.def.lines[0];
+  Sound.setWalking(false);
+  Sound.menuOpen();
+}
+
+function advanceDialogue() {
+  if (!activeDialogue) return;
+  activeDialogue.lineIndex++;
+  const { npc, lineIndex } = activeDialogue;
+  if (lineIndex >= npc.def.lines.length) {
+    closeDialogue();
+    if (npc.def.onComplete) npc.def.onComplete();
+    return;
+  }
+  dialogueTextEl.textContent = npc.def.lines[lineIndex];
+}
+
+function closeDialogue() {
+  activeDialogue = null;
+  dialoguePanelEl.classList.add("hidden");
+  Sound.menuClose();
+}
+
+// --- The Chief's Challenge (sparring duel) ----------------------------------
+
+// Both duelists live at the arena's center and simply have a small aggro
+// radius matching the ring itself (see the "chief"/"sparringPartner" entries
+// in ENEMY_TYPES) — the existing idle/chasing/attacking state machine
+// handles "wakes up once you step into the ring, gives up if you leave"
+// with zero bespoke code. They only actually appear once the player has a
+// first spell to fight with.
+function maybeSpawnDuelists() {
+  if (!village || village.duelSpawned || unlockedSpells.size === 0) return;
+  village.duelSpawned = true;
+  rescaleDuelistDifficulty();
+  enemies.push(makeEnemy("chief", village.arenaCenter.x, village.arenaCenter.y - 30));
+  enemies.push(makeEnemy("sparringPartner", village.arenaCenter.x + 40, village.arenaCenter.y + 20));
+}
+
+// "Based on the amount of abilities the players have, that dictates how
+// hard the sparring pair are to fight" — re-applied every time a spell is
+// unlocked (see unlockSpell()) and on every respawn after a loss, since
+// makeEnemy()/killEnemy()'s respawn both just read these current values.
+function rescaleDuelistDifficulty() {
+  const n = unlockedSpells.size;
+  const healthMul = 1 + n * 0.3;
+  const damageMul = 1 + n * 0.12;
+  ENEMY_TYPES.chief.maxHealth = Math.round(140 * healthMul);
+  ENEMY_TYPES.chief.attackDamage = Math.round(10 * damageMul);
+  ENEMY_TYPES.sparringPartner.maxHealth = Math.round(100 * healthMul);
+  ENEMY_TYPES.sparringPartner.attackDamage = Math.round(8 * damageMul);
+}
+
+// --- Boss Arena: Crystal Golem (Hollow Deep) --------------------------------
+
+// bossArenaCenter/BOSS_ARENA_RADIUS are set by generateBiomes() above, which
+// also keeps ordinary biome content from scattering into the clearing.
+const BOSS_BARRIER_RING_RX = BOSS_ARENA_RADIUS - 60;
+const BOSS_BARRIER_RING_RY = BOSS_BARRIER_RING_RX * 0.72;
+
+let bossArenaState = null; // built once per world by spawnBossArenaFurniture()
+
+function spawnBossArenaFurniture() {
+  bossArenaState = {
+    center: bossArenaCenter,
+    runeState: "dormant", // "dormant" | "channeling" | "defeated"
+    barrierObstacles: [],
+    golemEnemy: null,
+  };
+}
+
+function activateBossArena() {
+  if (!bossArenaState || bossArenaState.runeState !== "dormant") return;
+  bossArenaState.runeState = "channeling";
+  Sound.cast("wind");
+
+  const points = ForestAssets.barrierRingPoints(bossArenaState.center.x, bossArenaState.center.y, BOSS_BARRIER_RING_RX, BOSS_BARRIER_RING_RY, 8);
+  for (const p of points) {
+    bossArenaState.barrierObstacles.push({ type: "circle", kind: "crystalBarrier", x: p.x, y: p.y, radius: 60, expiresAt: Infinity });
+  }
+  obstacles.push(...bossArenaState.barrierObstacles);
+
+  const golem = makeEnemy("crystalGolem", bossArenaState.center.x, bossArenaState.center.y);
+  golem.state = "chasing"; // a boss doesn't get an idle grace period
+  enemies.push(golem);
+  bossArenaState.golemEnemy = golem;
+}
+
+function updateBossArena() {
+  if (!bossArenaState || bossArenaState.runeState !== "channeling") return;
+  if (bossArenaState.golemEnemy && bossArenaState.golemEnemy.state === "dead") {
+    bossArenaState.runeState = "defeated";
+    for (const obs of bossArenaState.barrierObstacles) {
+      const idx = obstacles.indexOf(obs);
+      if (idx !== -1) obstacles.splice(idx, 1);
+    }
+    bossArenaState.barrierObstacles = [];
+    unlockSpell(BOSS_REWARD_SPELL);
+  }
+}
+
+function drawBossArena(camera) {
+  if (!bossArenaState) return;
+  drawGroundSprite(ForestAssets.bossArena.arenaClearing, { x: bossArenaState.center.x, y: bossArenaState.center.y, scale: 2.9, flip: false }, camera);
+  const runeAsset = bossArenaState.runeState === "dormant" ? ForestAssets.bossArena.runeDormant : ForestAssets.bossArena.runeChanneling;
+  if (bossArenaState.runeState !== "defeated") {
+    drawGroundSprite(runeAsset, { x: bossArenaState.center.x, y: bossArenaState.center.y, scale: 1.6, flip: false }, camera);
+  }
+  if (bossArenaState.runeState === "channeling") {
+    const points = ForestAssets.barrierRingPoints(bossArenaState.center.x, bossArenaState.center.y, BOSS_BARRIER_RING_RX, BOSS_BARRIER_RING_RY, 8);
+    for (const p of points) {
+      drawGroundSprite(ForestAssets.crystalBarrier, { x: p.x, y: p.y, scale: 1.15, flip: false }, camera);
+    }
+  }
+}
+
+// --- Area transitions --------------------------------------------------------
+
+// Crossing the gate's arc, once broken, past this radius (short of
+// VILLAGE_RADIUS's hard clamp) leaves the Sanctuary for the wide world.
+const VILLAGE_EXIT_RADIUS = 860;
+
+function checkVillageExit() {
+  if (!village) return;
+  const dx = player.x - VILLAGE_CENTER.x;
+  const dy = player.y - VILLAGE_CENTER.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < VILLAGE_EXIT_RADIUS) return;
+  const angle = Math.atan2(dy, dx);
+  const angDiff = Math.abs(((angle - VILLAGE_GATE_ANGLE + Math.PI) % (Math.PI * 2)) - Math.PI);
+  if (angDiff < VILLAGE_GATE_HALF_WIDTH && village.gateTrees.every((t) => t.destroyed)) {
+    transitionToWorld();
+  }
+}
+
+function transitionToWorld() {
+  currentArea = "world";
+  player.x = campfire.x;
+  player.y = campfire.y + 110;
+  player.dashTimeLeft = 0;
+  Sound.setWalking(false);
+}
+
+function transitionToVillage() {
+  currentArea = "village";
+  player.x = village.spawnPoint.x;
+  player.y = village.spawnPoint.y;
+  player.dashTimeLeft = 0;
+  Sound.setWalking(false);
+  lobbyEl.classList.add("lobby-hidden");
+}
+window.transitionToVillage = transitionToVillage; // bridge for js/lobby.js's Return button
 
 // --- World generation (deferred) --------------------------------------------
 
@@ -2417,6 +3165,9 @@ function generateWorld() {
   // --- Biomes (five outlying wedges beyond the Grove) ---
   generateBiomes();
 
+  // --- Boss arena (Hollow Deep) ---
+  spawnBossArenaFurniture();
+
   // --- Healing pools, enemies ---
   generateHealingPools();
   spawnEnemies();
@@ -2426,6 +3177,7 @@ function generateWorld() {
   obstacles = [];
   iceBridges = [];
   projectiles = [];
+  bossProjectiles = [];
   effects = [];
   pendingEarthShatters = [];
 
@@ -2597,6 +3349,32 @@ function updatePlayerList(mp) {
   }
 }
 
+// Reads whichever boss fight is currently engaged (the village's Chief
+// duel, or the open world's Crystal Golem) and updates the shared boss
+// health bar HUD, hiding it when neither is active. Checked every frame
+// rather than tracked as its own bit of state, since "which fight (if any)
+// is live" is already fully derivable from enemies/bossArenaState.
+function updateBossHealthBarUI() {
+  let boss = null;
+  if (currentArea === "village" && village && village.duelSpawned) {
+    const chiefEnemy = enemies.find((e) => e.kind === "chief");
+    if (chiefEnemy && chiefEnemy.state !== "idle" && chiefEnemy.state !== "dead") boss = { enemy: chiefEnemy, name: "Chief" };
+  } else if (currentArea === "world" && bossArenaState && bossArenaState.golemEnemy) {
+    const golemEnemy = bossArenaState.golemEnemy;
+    if (golemEnemy.state !== "dead") boss = { enemy: golemEnemy, name: "Crystal Golem" };
+  }
+
+  if (!boss) {
+    bossHealthBarEl.classList.add("hidden");
+    return;
+  }
+  bossHealthBarEl.classList.remove("hidden");
+  bossHealthNameEl.textContent = boss.name;
+  const ratio = Math.max(0, Math.min(1, boss.enemy.health / ENEMY_TYPES[boss.enemy.kind].maxHealth));
+  bossHealthFillEl.setAttribute("width", 400 * ratio);
+  bossHealthSheenEl.setAttribute("width", 400 * ratio);
+}
+
 function loop(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05); // clamp for tab-switch stalls
   lastTime = now;
@@ -2609,45 +3387,77 @@ function loop(now) {
   const isPeer = mp && mp.mode === "peer";
 
   // Campfire menu: F opens it when in range, closes it when already open
-  // (from anywhere); Escape also closes it. game.js owns *when* it's shown
-  // (it's the one that knows the player's position); js/lobby.js owns what's
-  // inside it.
+  // (from anywhere); Escape also closes it. Whichever campfire is relevant
+  // depends on the current area. Everything else F can interact with —
+  // village NPCs, the boss arena's rune — is checked the same way, and
+  // dialogue (if already open) takes priority over starting anything new.
+  const activeCampfire = currentArea === "village" ? village.campfire : campfire;
   const menuOpenBefore = !lobbyEl.classList.contains("lobby-hidden");
-  const distToCampfire = Math.hypot(player.x - campfire.x, player.y - campfire.y);
+  const distToCampfire = Math.hypot(player.x - activeCampfire.x, player.y - activeCampfire.y);
   const inCampfireRange = distToCampfire < CAMPFIRE_INTERACT_RADIUS;
+  const nearbyNpc = currentArea === "village" && !inCampfireRange ? findNearestVillageNpc() : null;
+  const nearRune =
+    currentArea === "world" && !inCampfireRange && bossArenaState && bossArenaState.runeState === "dormant" &&
+    Math.hypot(player.x - bossArenaState.center.x, player.y - bossArenaState.center.y) < RUNE_INTERACT_RADIUS;
 
   const fJustPressed = keys.f && !fWasPressed;
   fWasPressed = keys.f;
 
   if (fJustPressed) {
-    if (menuOpenBefore) {
+    if (activeDialogue) {
+      advanceDialogue();
+    } else if (menuOpenBefore) {
       lobbyEl.classList.add("lobby-hidden");
       Sound.menuClose();
     } else if (inCampfireRange) {
       lobbyEl.classList.remove("lobby-hidden");
+      lobbyReturnVillageBtn.classList.toggle("hidden", currentArea !== "world");
       Sound.menuOpen();
       // Player.update() (which drives the walking rustle) stops running
       // while the menu is open — without this, the rustle would keep
       // looping at whatever gain it was mid-fade to if the menu opened
       // while the player was still moving.
       Sound.setWalking(false);
+    } else if (nearbyNpc) {
+      openDialogue(nearbyNpc);
+    } else if (nearRune) {
+      activateBossArena();
     }
-  } else if (menuOpenBefore && keys.escape) {
-    lobbyEl.classList.add("lobby-hidden");
-    Sound.menuClose();
+  } else if (keys.escape) {
+    if (activeDialogue) closeDialogue();
+    else if (menuOpenBefore) {
+      lobbyEl.classList.add("lobby-hidden");
+      Sound.menuClose();
+    }
   }
 
   const menuOpen = !lobbyEl.classList.contains("lobby-hidden");
-  campfirePromptEl.classList.toggle("hidden", !(inCampfireRange && !menuOpen));
+  const uiBlocking = menuOpen || !!activeDialogue;
+
+  if (uiBlocking) {
+    interactPromptEl.classList.add("hidden");
+  } else if (inCampfireRange) {
+    interactPromptEl.classList.remove("hidden");
+    interactPromptEl.innerHTML = "Press <strong>F</strong> to gather at the campfire";
+  } else if (nearbyNpc) {
+    interactPromptEl.classList.remove("hidden");
+    interactPromptEl.innerHTML = `Press <strong>F</strong> to talk to the ${nearbyNpc.def.name}`;
+  } else if (nearRune) {
+    interactPromptEl.classList.remove("hidden");
+    interactPromptEl.innerHTML = "Press <strong>F</strong> to awaken the rune";
+  } else {
+    interactPromptEl.classList.add("hidden");
+  }
+  campfirePromptEl.classList.add("hidden"); // superseded by interactPromptEl above (same spot, never both)
 
   if (isPeer) {
     // Strict host authority: our own avatar is rendered from the host's
     // broadcast rather than simulated locally (see js/multiplayer/peer-sync.js).
     // We still forward local input to the host every frame — except while
-    // the campfire menu is open, so the avatar holds still; the host will
+    // blocked by a menu/dialogue, so the avatar holds still; the host will
     // naturally treat our input as neutral once it goes stale (see
     // INPUT_TIMEOUT_MS in host-sim.js).
-    if (!menuOpen) mp.update(dt);
+    if (!uiBlocking) mp.update(dt);
     const localState = mp.getLocalOverride();
     if (localState) {
       player.x = localState.x;
@@ -2658,27 +3468,34 @@ function loop(now) {
       player.dashTimeLeft = localState.isDashing ? DASH_DURATION : 0;
     }
   } else {
-    if (!menuOpen) player.update(dt);
+    if (!uiBlocking) player.update(dt);
     // Host: always steps every remote player and broadcasts, even while the
-    // host's own campfire menu is open — otherwise opening it would freeze
+    // host's own menu/dialogue is open — otherwise opening it would freeze
     // the game for every connected friend, not just the host.
     if (mp) mp.update(dt);
   }
 
   // Combat/hazard simulation is local-only (not part of the multiplayer
-  // sync) and pauses along with the player while the campfire menu is open.
-  if (!menuOpen) {
+  // sync) and pauses along with the player while a menu/dialogue is open.
+  if (!uiBlocking) {
     updateEnemies(dt);
     updateProjectiles(dt);
+    updateBossProjectiles(dt);
     updateEffects(dt);
     updateHealingPools(now);
     updatePendingEarthShatters(now);
     pruneExpired(obstacles, now);
     pruneExpired(iceBridges, now);
+    updateBossArena();
+    if (currentArea === "village") {
+      maybeSpawnDuelists();
+      checkVillageExit();
+    }
   }
 
   updateCamera();
   updateHealthBar();
+  updateBossHealthBarUI();
 
   // Zoom is purely local UI feedback — it reads the raw key state directly
   // rather than the (possibly host-delayed) simulated `isCasting`, so it
@@ -2688,16 +3505,16 @@ function loop(now) {
 
   // Spellbook: Q toggles it open/closed (press again to close), at any time,
   // not just while casting — it's a reference sheet, not something gated on
-  // being mid-spell. Ignored while the campfire menu is open, same as Tab.
+  // being mid-spell. Ignored while a menu/dialogue is open, same as Tab.
   const qJustPressed = keys.q && !qWasPressed;
   qWasPressed = keys.q;
-  if (qJustPressed && !menuOpen) spellbookEl.classList.toggle("visible");
+  if (qJustPressed && !uiBlocking) spellbookEl.classList.toggle("visible");
 
   // Player list: held down to show, hidden the instant Tab is released —
-  // ignored while the campfire menu is open, where Tab reverts to normal
+  // ignored while a menu/dialogue is open, where Tab reverts to normal
   // browser focus-cycling between that menu's own inputs and buttons (see
   // the preventDefault condition in the keydown listener above).
-  playerListEl.classList.toggle("visible", keys.tab && !menuOpen);
+  playerListEl.classList.toggle("visible", keys.tab && !uiBlocking);
   if (playerListEl.classList.contains("visible")) updatePlayerList(mp);
 
   // The player is always drawn at canvas center, so scaling around that
@@ -2707,59 +3524,69 @@ function loop(now) {
   ctx.scale(camera.zoom, camera.zoom);
   ctx.translate(-canvas.width / 2, -canvas.height / 2);
 
-  drawGround();
-  drawBiomeGround(camera);
-  drawWater(camera);
-  drawHealingPools(camera);
-  drawIceBridges(camera);
+  if (currentArea === "village") {
+    drawVillage(camera, mp);
+  } else {
+    drawGround();
+    drawBiomeGround(camera);
+    drawWater(camera);
+    drawHealingPools(camera);
+    drawIceBridges(camera);
+    drawBossArena(camera);
 
-  // Depth-sort every ground object, remote players, and the local player by
-  // world y so nearer/taller things convincingly occlude farther ones.
-  //
-  // Static scatter content (trees/foliage/mushrooms/rocks/ambient/biome
-  // content) is pulled from renderGrid rather than iterated in full — the
-  // world can hold tens of thousands of such items, but only the handful
-  // actually near the camera matter for any given frame. RENDER_VIEW_MARGIN
-  // is generous enough that even the widest ground sprite, anchored just
-  // outside the strict viewport, still gets included before it'd visibly pop in.
-  const drawables = [];
-  drawables.push({ y: campfire.y, kind: "campfire", item: campfire });
-  const viewHalfW = canvas.width / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
-  const viewHalfH = canvas.height / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
-  const viewCenterX = camera.x + canvas.width / 2;
-  const viewCenterY = camera.y + canvas.height / 2;
-  renderGrid.queryRect(viewCenterX - viewHalfW, viewCenterY - viewHalfH, viewCenterX + viewHalfW, viewCenterY + viewHalfH, drawables);
-  for (const enemy of enemies) drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
-  for (const p of projectiles) drawables.push({ y: p.y, kind: "projectile", item: p });
-  if (mp) {
-    for (const remote of mp.getRemotePlayers()) {
-      drawables.push({ y: remote.y, kind: "remote", item: remote });
+    // Depth-sort every ground object, remote players, and the local player
+    // by world y so nearer/taller things convincingly occlude farther ones.
+    //
+    // Static scatter content (trees/foliage/mushrooms/rocks/ambient/biome
+    // content) is pulled from renderGrid rather than iterated in full — the
+    // world can hold tens of thousands of such items, but only the handful
+    // actually near the camera matter for any given frame. RENDER_VIEW_MARGIN
+    // is generous enough that even the widest ground sprite, anchored just
+    // outside the strict viewport, still gets included before it'd visibly pop in.
+    const drawables = [];
+    drawables.push({ y: campfire.y, kind: "campfire", item: campfire });
+    const viewHalfW = canvas.width / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
+    const viewHalfH = canvas.height / (2 * camera.zoom) + RENDER_VIEW_MARGIN;
+    const viewCenterX = camera.x + canvas.width / 2;
+    const viewCenterY = camera.y + canvas.height / 2;
+    renderGrid.queryRect(viewCenterX - viewHalfW, viewCenterY - viewHalfH, viewCenterX + viewHalfW, viewCenterY + viewHalfH, drawables);
+    for (const enemy of enemies) {
+      if (enemy.kind === "chief" || enemy.kind === "sparringPartner") continue; // village-only
+      drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
     }
-  }
-  drawables.push({ y: player.y, kind: "player", item: null });
-
-  drawables.sort((a, b) => a.y - b.y);
-
-  for (const d of drawables) {
-    switch (d.kind) {
-      case "tree": drawTree(d.item, camera); break;
-      case "foliage": drawFoliage(d.item, camera); break;
-      case "mushroom": drawMushroom(d.item, camera); break;
-      case "rock": drawRock(d.item, camera); break;
-      case "ambient": drawAmbient(d.item, camera); break;
-      case "campfire": drawCampfire(d.item, camera); break;
-      case "biomeTree": drawBiomeTree(d.item, camera); break;
-      case "biomeFoliage": drawBiomeFoliage(d.item, camera); break;
-      case "enemy": drawEnemy(d.item, camera); break;
-      case "projectile": drawProjectile(d.item, camera); break;
-      case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
-      case "player": player.draw(ctx, camera); break;
+    for (const p of projectiles) drawables.push({ y: p.y, kind: "projectile", item: p });
+    for (const p of bossProjectiles) drawables.push({ y: p.y, kind: "bossProjectile", item: p });
+    if (mp) {
+      for (const remote of mp.getRemotePlayers()) {
+        drawables.push({ y: remote.y, kind: "remote", item: remote });
+      }
     }
-  }
+    drawables.push({ y: player.y, kind: "player", item: null });
 
-  drawObstacles(camera);
-  for (const effect of effects) drawEffect(effect, camera);
-  drawWorldMist(camera);
+    drawables.sort((a, b) => a.y - b.y);
+
+    for (const d of drawables) {
+      switch (d.kind) {
+        case "tree": drawTree(d.item, camera); break;
+        case "foliage": drawFoliage(d.item, camera); break;
+        case "mushroom": drawMushroom(d.item, camera); break;
+        case "rock": drawRock(d.item, camera); break;
+        case "ambient": drawAmbient(d.item, camera); break;
+        case "campfire": drawCampfire(d.item, camera); break;
+        case "biomeTree": drawBiomeTree(d.item, camera); break;
+        case "biomeFoliage": drawBiomeFoliage(d.item, camera); break;
+        case "enemy": drawEnemy(d.item, camera); break;
+        case "projectile": drawProjectile(d.item, camera); break;
+        case "bossProjectile": drawBossProjectile(d.item, camera); break;
+        case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
+        case "player": player.draw(ctx, camera); break;
+      }
+    }
+
+    drawObstacles(camera);
+    for (const effect of effects) drawEffect(effect, camera);
+    drawWorldMist(camera);
+  }
 
   ctx.restore();
 
@@ -2769,9 +3596,15 @@ function loop(now) {
 // Entry point — called by js/lobby.js once the player has chosen solo/host/
 // join and (for host/join) RNG has been seeded appropriately. Everything
 // above this point is safe to load eagerly; everything the game actually
-// *does* waits here.
+// *does* waits here. The player always starts in the Sanctuary (see
+// "--- Spawn Hub (Village) ---" above), not the random world.
 function startGame() {
-  generateWorld();
+  generateWorld(); // also builds `player`, positioned at the world campfire
+  generateVillage(); // must run after generateWorld() resets `obstacles` — see its gate-tree handling
+  currentArea = "village";
+  player.x = village.spawnPoint.x;
+  player.y = village.spawnPoint.y;
+  updateSpellbookLockState();
   lastTime = performance.now();
   requestAnimationFrame(loop);
 }

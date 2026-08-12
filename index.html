@@ -94,6 +94,11 @@
         <h1 class="lobby-title">Forest Game</h1>
         <p class="lobby-subtitle">Invite friends into this world, or join theirs.</p>
 
+        <!-- Only shown while out in the wide world (js/game.js toggles
+             .hidden based on window.currentArea when the menu opens) —
+             back in the Sanctuary this campfire behaves exactly as before. -->
+        <button id="lobby-return-village-btn" class="lobby-btn hidden">Return to the Sanctuary</button>
+
         <div id="lobby-connect-form">
           <button id="lobby-host-btn" class="lobby-btn lobby-btn-primary">Host Game</button>
           <div id="lobby-code-display" class="lobby-code hidden"></div>
@@ -114,6 +119,38 @@
     </div>
 
     <div id="campfire-prompt" class="hidden">Press <strong>F</strong> to gather at the campfire</div>
+
+    <!-- Generic interact prompt — NPCs, the boss arena's summoning rune,
+         and anything else you walk up to and press F for. Text is set by
+         whatever's nearby (js/game.js). -->
+    <div id="interact-prompt" class="hidden">Press <strong>F</strong> to interact</div>
+
+    <!-- Dialogue panel — NPC portrait, name plate, and current line. Advances
+         one line per F press; the prompt at the corner hints there's more. -->
+    <div id="dialogue-panel" class="hidden">
+      <div id="dialogue-portrait"></div>
+      <div id="dialogue-body">
+        <div id="dialogue-name"></div>
+        <div id="dialogue-text"></div>
+        <svg id="dialogue-continue" width="16" height="16" viewBox="0 0 16 16">
+          <polygon points="2,2 14,8 2,14" fill="#2a1f18"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Boss health bar — shown only while a boss fight (Crystal Golem,
+         the Chief's sparring challenge) is active. -->
+    <div id="boss-health-bar" class="hidden">
+      <svg width="420" height="70" viewBox="0 0 420 70">
+        <rect x="2" y="24" width="416" height="30" rx="6" fill="#e8dcc0" stroke="#2a1f18" stroke-width="3.5"/>
+        <rect x="10" y="31" width="400" height="16" rx="3" fill="#3a2c1e" opacity="0.3"/>
+        <rect id="boss-health-fill" x="10" y="31" width="400" height="16" rx="3" fill="#6b5a8a" stroke="#2a1f18" stroke-width="2"/>
+        <rect id="boss-health-sheen" x="10" y="31" width="400" height="6" rx="3" fill="#9b7fc4" opacity="0.6"/>
+        <polygon points="0,39 20,24 20,54" fill="#5a4a8a" stroke="#2a1f18" stroke-width="2.5"/>
+        <polygon points="420,39 400,24 400,54" fill="#5a4a8a" stroke="#2a1f18" stroke-width="2.5"/>
+        <text id="boss-health-name" x="210" y="16" text-anchor="middle" font-family="Amatic SC, cursive" font-size="20" fill="#f0e6d2">Boss</text>
+      </svg>
+    </div>
 
     <div id="session-badge" class="hidden">
       Room <span id="session-badge-code"></span> — <span id="session-badge-count"></span> player(s)
