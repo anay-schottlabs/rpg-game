@@ -82,5 +82,49 @@ const WorldGen = (() => {
     return points;
   }
 
-  return { createValueNoise2D, scatterPatchy, scatterClusters };
+  // Uniform-grid spatial hash used to reject placements that would stack
+  // too heavily on top of something already placed. `allowance` < 1 lets
+  // footprints overlap a bit (natural — a fern at the base of a tree, a
+  // mushroom nudged against a rock) without permitting full stacking.
+  function createSpatialIndex(cellSize) {
+    const cells = new Map();
+
+    function key(cx, cy) {
+      return `${cx},${cy}`;
+    }
+
+    function cellOf(x, y) {
+      return [Math.floor(x / cellSize), Math.floor(y / cellSize)];
+    }
+
+    function insert(x, y, radius) {
+      const [cx, cy] = cellOf(x, y);
+      const k = key(cx, cy);
+      let bucket = cells.get(k);
+      if (!bucket) {
+        bucket = [];
+        cells.set(k, bucket);
+      }
+      bucket.push({ x, y, radius });
+    }
+
+    function hasOverlap(x, y, radius, allowance) {
+      const [cx, cy] = cellOf(x, y);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const bucket = cells.get(key(cx + dx, cy + dy));
+          if (!bucket) continue;
+          for (const other of bucket) {
+            const minDist = (radius + other.radius) * allowance;
+            if (Math.hypot(x - other.x, y - other.y) < minDist) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    return { insert, hasOverlap };
+  }
+
+  return { createValueNoise2D, scatterPatchy, scatterClusters, createSpatialIndex };
 })();
