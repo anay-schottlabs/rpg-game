@@ -56,7 +56,12 @@ window.addEventListener("keydown", (e) => {
     const dir = ARROW_KEY_TO_DIR[key];
     if (dir) {
       e.preventDefault();
-      castSequence.push(dir);
+      // e.repeat is true for OS-generated auto-repeat keydowns fired while
+      // a key is held past the repeat threshold — without this guard,
+      // holding an arrow even slightly too long silently inserts duplicate
+      // directions into the sequence, so a combo the player entered
+      // correctly stops matching anything and no sigil flashes.
+      if (!e.repeat) castSequence.push(dir);
       updateCastingRing();
     }
   }
