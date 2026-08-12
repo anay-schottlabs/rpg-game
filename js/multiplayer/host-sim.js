@@ -9,7 +9,7 @@
 const BROADCAST_INTERVAL_MS = 1000 / 15; // ~15Hz, per the 10-20Hz target
 const INPUT_TIMEOUT_MS = 500; // stop moving a peer if we haven't heard from them
 
-const NEUTRAL_INPUT = { dx: 0, dy: 0, shift: false, e: false };
+const NEUTRAL_INPUT = { dx: 0, dy: 0, e: false };
 const COLORS = ["#7fb0d8", "#8fc48a", "#d88fc4", "#c48a5c", "#a08fd8", "#e0d060"];
 
 const remotePlayers = new Map(); // peerId -> simulation state (same shape simulatePlayerMovement expects)
@@ -30,7 +30,6 @@ function addPeer(peerId, campfire) {
     facingX: 0,
     facingY: 1,
     dashTimeLeft: 0,
-    dashCooldownLeft: 0,
     isCasting: false,
     color: COLORS[nextColorIndex++ % COLORS.length],
     lastInput: NEUTRAL_INPUT,

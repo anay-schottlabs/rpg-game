@@ -59,7 +59,6 @@ function update(dt) {
   const input = {
     dx: (k.d ? 1 : 0) - (k.a ? 1 : 0),
     dy: (k.s ? 1 : 0) - (k.w ? 1 : 0),
-    shift: k.shift,
     e: k.e,
   };
 
@@ -68,7 +67,6 @@ function update(dt) {
     !lastSentInput ||
     input.dx !== lastSentInput.dx ||
     input.dy !== lastSentInput.dy ||
-    input.shift !== lastSentInput.shift ||
     input.e !== lastSentInput.e;
 
   if (changed || heartbeatAccumulatorMs >= HEARTBEAT_INTERVAL_MS) {

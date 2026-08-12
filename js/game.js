@@ -31,7 +31,6 @@ const keys = {
   a: false,
   s: false,
   d: false,
-  shift: false,
   e: false,
   q: false,
   f: false,
@@ -107,6 +106,7 @@ const SPELLS = [
   { name: "Ember Burst", element: "fire", combo: ["right", "down", "left", "up", "right"] },
   { name: "Gale Step", element: "wind", combo: ["up", "left", "right", "down", "down", "up"] },
   { name: "Rockfall", element: "earth", combo: ["down", "down", "right", "up"] },
+  { name: "Gust Step", element: "wind", combo: ["left", "right"] },
 ];
 
 const ARROW_KEY_TO_DIR = { arrowup: "up", arrowdown: "down", arrowleft: "left", arrowright: "right" };
@@ -169,6 +169,9 @@ function triggerSpellEffect(spellName) {
       break;
     case "Tide Call":
       castTideCall();
+      break;
+    case "Gust Step":
+      castGustStep();
       break;
   }
 }
@@ -733,25 +736,23 @@ function drawHealingPools(camera) {
 // --- Player movement & rendering (shared with multiplayer) -----------------
 
 const PLAYER_BASE_SPEED = 220; // pixels per second
-// Gust Step — the Shift-triggered movement ability (design doc's Movement
-// Abilities section), a quick wind-propelled speed burst rather than a bare
-// placeholder streak.
+// Gust Step (design doc's Movement Abilities section) — cast like any other
+// spell (see SPELLS below); castGustStep() just arms this burst rather than
+// it triggering off a held movement key.
 const DASH_SPEED_MULTIPLIER = 2.6;
 const DASH_DURATION = 0.18; // seconds the burst itself lasts
-const DASH_COOLDOWN = 0.6; // seconds before another dash can start
 const CAST_SPEED_MULTIPLIER = 0.12; // drastic slowdown while channeling a spell
 
 // Pure movement step used by both the local Player class below AND, in
 // multiplayer, js/multiplayer/host-sim.js — which drives every remote
 // player through this exact same function every frame so movement rules
 // are identical no matter who's simulating whom. `state` is mutated in
-// place ({x,y,facingX,facingY,dashTimeLeft,dashCooldownLeft,isCasting}).
-// `input` is {dx,dy,shift,e} where dx/dy are raw -1/0/1 axis intent.
+// place ({x,y,facingX,facingY,dashTimeLeft,isCasting}).
+// `input` is {dx,dy,e} where dx/dy are raw -1/0/1 axis intent.
 function simulatePlayerMovement(state, input, dt) {
   const hasInput = input.dx !== 0 || input.dy !== 0;
   state.isCasting = input.e;
 
-  if (state.dashCooldownLeft > 0) state.dashCooldownLeft -= dt;
   if (state.dashTimeLeft > 0) state.dashTimeLeft -= dt;
 
   if (hasInput) {
@@ -762,13 +763,6 @@ function simulatePlayerMovement(state, input, dt) {
     const dy = input.dy / len;
     state.facingX = dx;
     state.facingY = dy;
-
-    // Holding shift while moving triggers a quick speed burst, capped by a
-    // cooldown. Casting locks that out — you plant your feet to channel.
-    if (!state.isCasting && input.shift && state.dashCooldownLeft <= 0) {
-      state.dashTimeLeft = DASH_DURATION;
-      state.dashCooldownLeft = DASH_COOLDOWN;
-    }
 
     let speed = state.dashTimeLeft > 0 ? PLAYER_BASE_SPEED * DASH_SPEED_MULTIPLIER : PLAYER_BASE_SPEED;
     if (state.isCasting) speed = PLAYER_BASE_SPEED * CAST_SPEED_MULTIPLIER;
@@ -790,6 +784,13 @@ function simulatePlayerMovement(state, input, dt) {
   }
 }
 window.simulatePlayerMovement = simulatePlayerMovement; // bridge for host-sim.js
+
+// Gust Step's cast effect — just arms the speed burst that
+// simulatePlayerMovement above already knows how to apply and that
+// drawPlayerLike below already knows how to render.
+function castGustStep() {
+  player.dashTimeLeft = DASH_DURATION;
+}
 
 // Shared visual for any player-shaped thing: the local player, or a remote
 // player rendered from multiplayer state. `state` needs at minimum
@@ -847,7 +848,6 @@ class Player {
     this.facingY = 1; // default: facing down
     this.color = "#e0b64a";
     this.dashTimeLeft = 0;
-    this.dashCooldownLeft = 0;
     this.isCasting = false;
     this.maxHealth = 100;
     this.health = 100;
@@ -868,7 +868,6 @@ class Player {
     const input = {
       dx: (keys.d ? 1 : 0) - (keys.a ? 1 : 0),
       dy: (keys.s ? 1 : 0) - (keys.w ? 1 : 0),
-      shift: keys.shift,
       e: keys.e,
     };
     simulatePlayerMovement(this, input, dt);
