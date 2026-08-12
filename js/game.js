@@ -35,12 +35,20 @@ const WORLD_WIDTH = 2000;
 const WORLD_HEIGHT = 2000;
 
 // Static forest decoration, generated once so trees don't jump around each frame.
+function pickTreeType() {
+  const r = Math.random();
+  if (r < 0.7) return "common";
+  if (r < 0.92) return "elder";
+  return "dead";
+}
+
 const trees = [];
 for (let i = 0; i < 150; i++) {
   trees.push({
     x: Math.random() * WORLD_WIDTH,
     y: Math.random() * WORLD_HEIGHT,
-    radius: 14 + Math.random() * 18,
+    type: pickTreeType(),
+    scale: 0.75 + Math.random() * 0.55,
   });
 }
 
@@ -138,33 +146,29 @@ function drawGround() {
 }
 
 function drawTree(tree, camera) {
+  const { width: baseWidth, height: baseHeight, groundFraction } = ForestAssets.TREE_VIEWBOX;
+  const width = baseWidth * tree.scale;
+  const height = baseHeight * tree.scale;
+
   const screenX = tree.x - camera.x;
   const screenY = tree.y - camera.y;
 
   if (
-    screenX < -50 || screenX > canvas.width + 50 ||
-    screenY < -50 || screenY > canvas.height + 50
+    screenX < -width || screenX > canvas.width + width ||
+    screenY < -height || screenY > canvas.height + height
   ) {
     return; // cull off-screen trees
   }
 
-  // Trunk
-  ctx.fillStyle = "#4a3320";
-  ctx.fillRect(screenX - tree.radius * 0.15, screenY, tree.radius * 0.3, tree.radius * 0.6);
-
-  // Canopy
+  // Shadow at the trunk base
   ctx.beginPath();
-  ctx.arc(screenX, screenY, tree.radius, 0, Math.PI * 2);
-  ctx.fillStyle = "#1f4d1f";
+  ctx.ellipse(screenX, screenY, width * 0.22, height * 0.05, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
   ctx.fill();
-  ctx.strokeStyle = "#153815";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-}
 
-function drawTrees() {
-  for (const tree of trees) {
-    drawTree(tree, camera);
+  const img = ForestAssets.trees[tree.type];
+  if (img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, screenX - width / 2, screenY - height * groundFraction, width, height);
   }
 }
 
@@ -180,8 +184,15 @@ function loop(now) {
   updateCamera();
 
   drawGround();
-  drawTrees();
-  player.draw(ctx, camera);
+
+  // Depth-sort trees and the player by ground position so the player can
+  // walk in front of or behind a tree canopy convincingly.
+  const drawables = [
+    ...trees.map((tree) => ({ y: tree.y, draw: () => drawTree(tree, camera) })),
+    { y: player.y, draw: () => player.draw(ctx, camera) },
+  ];
+  drawables.sort((a, b) => a.y - b.y);
+  for (const item of drawables) item.draw();
 
   requestAnimationFrame(loop);
 }
