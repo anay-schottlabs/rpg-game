@@ -121,16 +121,22 @@ const ForestAssets = (() => {
 
   // Per-variant ground anchor (fraction down the viewBox where the stems
   // actually touch the ground) since foliage silhouettes aren't uniform.
+  // Display width/height are NOT the raw 140x140 viewBox — bush and fern
+  // fill most of their viewBox (so at tree-sized dimensions they read as
+  // tree-sized), while flowers are mostly empty space around a small
+  // cluster of dots, so the same box size reads much smaller. Sizes below
+  // are picked per-asset so the visible ink ends up a sensible in-world
+  // size relative to the ~150px-wide trees and the ~28px player.
   const foliageMeta = {
-    bush: { groundFraction: 104 / 140 },
-    fern: { groundFraction: 125 / 140 },
-    tallGrass: { groundFraction: 125 / 140 },
-    flowers: { groundFraction: 125 / 140 },
+    bush: { width: 62, height: 62, groundFraction: 104 / 140 },
+    fern: { width: 46, height: 46, groundFraction: 125 / 140 },
+    tallGrass: { width: 43, height: 43, groundFraction: 125 / 140 },
+    flowers: { width: 100, height: 100, groundFraction: 125 / 140 },
   };
 
   const foliage = {};
   for (const [key, svg] of Object.entries(foliageSvgs)) {
-    foliage[key] = { image: svgToImage(svg), width: 140, height: 140, groundFraction: foliageMeta[key].groundFraction };
+    foliage[key] = { image: svgToImage(svg), width: foliageMeta[key].width, height: foliageMeta[key].height, groundFraction: foliageMeta[key].groundFraction };
   }
 
   // --- Mushrooms ---------------------------------------------------------
@@ -164,11 +170,14 @@ const ForestAssets = (() => {
       <path d="M45,95 Q45,68 72,65 Q99,68 99,95 Q72,105 45,95 Z" fill="#8a6a48" stroke="#2a1f18" stroke-width="3"/>
     </svg>`;
 
+  // Real mushrooms are tiny — the cap fills most of its 120x140 viewBox
+  // (unlike flowers' mostly-empty one), so it needs a much smaller display
+  // size than the raw viewBox to read as ankle-height rather than tree-height.
   const mushrooms = {
-    redCap: { image: svgToImage(mushroomSvg("#a63d3d", true)), width: 120, height: 140, groundFraction: 124 / 140 },
-    tawnyCap: { image: svgToImage(mushroomSvg("#b98a4a", false)), width: 120, height: 140, groundFraction: 124 / 140 },
-    blueCap: { image: svgToImage(mushroomSvg("#4a6a8a", false)), width: 120, height: 140, groundFraction: 124 / 140 },
-    cluster: { image: svgToImage(clusterSvg), width: 120, height: 140, groundFraction: 125 / 140 },
+    redCap: { image: svgToImage(mushroomSvg("#a63d3d", true)), width: 26, height: 30, groundFraction: 124 / 140 },
+    tawnyCap: { image: svgToImage(mushroomSvg("#b98a4a", false)), width: 26, height: 30, groundFraction: 124 / 140 },
+    blueCap: { image: svgToImage(mushroomSvg("#4a6a8a", false)), width: 26, height: 30, groundFraction: 124 / 140 },
+    cluster: { image: svgToImage(clusterSvg), width: 34, height: 40, groundFraction: 125 / 140 },
   };
 
   // --- Rocks ---------------------------------------------------------------
@@ -220,5 +229,103 @@ const ForestAssets = (() => {
     }
   }
 
-  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks };
+  // --- Campfire ------------------------------------------------------------
+
+  // No campfire exists in the source Forest Kit — the project's only
+  // campfire-related files are reference photos too large for this tool to
+  // fetch in full. Hand-drawn here to match the kit's established style
+  // (dark ink outlines, deepHatch cross-texture, a warm radial glow reused
+  // from the same idea as the kit's firefly/spore glow).
+  const campfireSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="160" height="170" viewBox="0 0 160 170">
+      <defs>
+        <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+          <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+          <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+        </pattern>
+        <radialGradient id="fireGlow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#f4c94a" stop-opacity="0.85"/>
+          <stop offset="1" stop-color="#f4c94a" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <circle cx="80" cy="110" r="70" fill="url(#fireGlow)"/>
+      <ellipse cx="80" cy="152" rx="54" ry="14" fill="#241c14" opacity="0.55"/>
+
+      <polygon points="18,150 10,138 20,126 34,130 36,146 26,154" fill="#8a8478" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+      <polygon points="18,150 10,138 20,126 34,130 36,146 26,154" fill="url(#deepHatch)" opacity="0.4"/>
+      <polygon points="142,150 150,138 140,126 126,130 124,146 134,154" fill="#8a8478" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+      <polygon points="142,150 150,138 140,126 126,130 124,146 134,154" fill="url(#deepHatch)" opacity="0.4"/>
+      <polygon points="46,158 36,150 42,138 58,138 64,150 56,160" fill="#8a8478" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+      <polygon points="46,158 36,150 42,138 58,138 64,150 56,160" fill="url(#deepHatch)" opacity="0.4"/>
+      <polygon points="114,158 104,150 110,138 126,138 132,150 124,160" fill="#8a8478" stroke="#2a1f18" stroke-width="3" stroke-linejoin="round"/>
+      <polygon points="114,158 104,150 110,138 126,138 132,150 124,160" fill="url(#deepHatch)" opacity="0.4"/>
+
+      <rect x="35" y="128" width="90" height="12" rx="6" fill="#5a4530" stroke="#2a1f18" stroke-width="3" transform="rotate(-18 80 134)"/>
+      <rect x="35" y="128" width="90" height="12" rx="6" fill="#5a4530" stroke="#2a1f18" stroke-width="3" transform="rotate(18 80 134)"/>
+      <rect x="35" y="128" width="90" height="12" rx="6" fill="url(#deepHatch)" opacity="0.3" transform="rotate(-18 80 134)"/>
+      <rect x="35" y="128" width="90" height="12" rx="6" fill="url(#deepHatch)" opacity="0.3" transform="rotate(18 80 134)"/>
+
+      <path d="M80,55 Q104,85 92,118 Q86,135 80,138 Q74,135 68,118 Q56,85 80,55 Z" fill="#c1442b" stroke="#2a1f18" stroke-width="3"/>
+      <path d="M80,72 Q94,92 87,114 Q83,126 80,128 Q77,126 73,114 Q66,92 80,72 Z" fill="#e8863c" stroke="#2a1f18" stroke-width="2"/>
+      <path d="M80,88 Q88,100 84,116 Q82,123 80,124 Q78,123 76,116 Q72,100 80,88 Z" fill="#f4d35e" stroke="none"/>
+
+      <circle cx="100" cy="60" r="3" fill="#f4d35e"/>
+      <circle cx="62" cy="50" r="2.4" fill="#f4d35e"/>
+      <circle cx="90" cy="38" r="2" fill="#f4c94a"/>
+    </svg>`;
+
+  const campfire = { image: svgToImage(campfireSvg), width: 170, height: 181, groundFraction: 160 / 170 };
+
+  // --- Ambient details -------------------------------------------------
+
+  const ambientSvgs = {
+    fallenLog: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="100" viewBox="0 0 140 100">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+          <clipPath id="logClip"><rect x="20" y="38" width="95" height="26" rx="13"/></clipPath>
+        </defs>
+        <rect x="20" y="38" width="95" height="26" rx="13" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <rect x="20" y="49" width="95" height="15" fill="url(#deepHatch)" opacity="0.35" clip-path="url(#logClip)"/>
+        <path d="M42,39 L40,63 M60,38 L58,64 M78,38 L76,64 M94,39 L92,63" stroke="#2a1f18" stroke-width="1" opacity="0.3" clip-path="url(#logClip)"/>
+        <ellipse cx="108" cy="51" rx="10" ry="13" fill="#8a6a48" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="108" cy="51" rx="6" ry="8" fill="none" stroke="#2a1f18" stroke-width="1.3" opacity="0.6"/>
+        <ellipse cx="108" cy="51" rx="2.5" ry="3.5" fill="none" stroke="#2a1f18" stroke-width="1.1" opacity="0.6"/>
+      </svg>`,
+
+    stump: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="100" viewBox="0 0 140 100">
+        <rect x="45" y="45" width="50" height="35" fill="#5a4530" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="70" cy="45" rx="25" ry="12" fill="#8a6a48" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="70" cy="45" rx="14" ry="6.5" fill="none" stroke="#2a1f18" stroke-width="1.2" opacity="0.6"/>
+      </svg>`,
+
+    twigPile: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="100" viewBox="0 0 140 100">
+        <line x1="30" y1="70" x2="80" y2="55" stroke="#5a4530" stroke-width="4" stroke-linecap="round"/>
+        <line x1="40" y1="75" x2="100" y2="60" stroke="#5a4530" stroke-width="4" stroke-linecap="round"/>
+        <line x1="55" y1="80" x2="75" y2="50" stroke="#5a4530" stroke-width="3" stroke-linecap="round"/>
+        <ellipse cx="90" cy="70" rx="8" ry="5" fill="#a9642f" stroke="#2a1f18" stroke-width="1.5"/>
+        <ellipse cx="105" cy="75" rx="7" ry="4.5" fill="#7a5c3e" stroke="#2a1f18" stroke-width="1.5"/>
+      </svg>`,
+  };
+
+  // All three share the 140x100 viewBox; ground anchor is the lowest point
+  // of the drawn shape (the pieces lie flat rather than standing upright).
+  const ambientMeta = {
+    fallenLog: { width: 95, height: 68, groundFraction: 64 / 100 },
+    stump: { width: 60, height: 43, groundFraction: 80 / 100 },
+    twigPile: { width: 55, height: 39, groundFraction: 80 / 100 },
+  };
+
+  const ambient = {};
+  for (const [key, svg] of Object.entries(ambientSvgs)) {
+    ambient[key] = { image: svgToImage(svg), width: ambientMeta[key].width, height: ambientMeta[key].height, groundFraction: ambientMeta[key].groundFraction };
+  }
+
+  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient };
 })();
