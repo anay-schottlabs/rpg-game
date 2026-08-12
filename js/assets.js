@@ -447,6 +447,17 @@ const ForestAssets = (() => {
         <polygon points="10,40 30,30 190,28 210,42 205,66 20,70" fill="#bcdfe8" stroke="#2a1f18" stroke-width="3.5" stroke-linejoin="round"/>
         <path d="M50,36 Q90,30 130,33 Q150,35 140,44 Q100,47 60,45 Q40,43 50,36 Z" fill="#eef8fa" opacity="0.5"/>
       </svg>`,
+
+    // "Gust Step — Dash" from the design doc's Movement Abilities section,
+    // cropped to just the motion-blur streaks + wind glyph (the mockup's own
+    // creature icon is dropped — our player already draws its own body).
+    gustStepStreak: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="125" height="45" viewBox="0 0 125 45">
+        <path d="M7,17 L57,7" stroke="#d8f0f0" stroke-width="5" opacity="0.25" stroke-linecap="round"/>
+        <path d="M27,27 L77,15" stroke="#d8f0f0" stroke-width="6" opacity="0.4" stroke-linecap="round"/>
+        <path d="M52,35 L99,19" stroke="#d8f0f0" stroke-width="7" opacity="0.6" stroke-linecap="round"/>
+        <polygon points="87,7 75,23 95,29 115,17 105,9" fill="none" stroke="#bfe3e3" stroke-width="2" opacity="0.5"/>
+      </svg>`,
   };
 
   const spellMeta = {
@@ -455,6 +466,7 @@ const ForestAssets = (() => {
     earthWallPillar: { width: 95, height: 127, groundFraction: 150 / 160 },
     earthWallBarricade: { width: 190, height: 95, groundFraction: 92 / 110 },
     iceBridgeSegment: { width: 150, height: 68, groundFraction: 76 / 100 },
+    gustStepStreak: { width: 125, height: 45, groundFraction: 0.5 }, // airborne — drawn manually via translate/rotate, not the ground-anchored path
   };
 
   const spellEffects = {};

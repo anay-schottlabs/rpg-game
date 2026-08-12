@@ -733,6 +733,9 @@ function drawHealingPools(camera) {
 // --- Player movement & rendering (shared with multiplayer) -----------------
 
 const PLAYER_BASE_SPEED = 220; // pixels per second
+// Gust Step — the Shift-triggered movement ability (design doc's Movement
+// Abilities section), a quick wind-propelled speed burst rather than a bare
+// placeholder streak.
 const DASH_SPEED_MULTIPLIER = 2.6;
 const DASH_DURATION = 0.18; // seconds the burst itself lasts
 const DASH_COOLDOWN = 0.6; // seconds before another dash can start
@@ -803,24 +806,18 @@ function drawPlayerLike(ctx, camera, state) {
   ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
   ctx.fill();
 
-  // Dash streak — fades out behind the player over the burst's duration.
+  // Gust Step dash streak (design-doc asset) — trails behind the player
+  // along the direction of travel, fading out over the burst's duration.
   const dashTimeLeft = state.dashTimeLeft || 0;
   if (dashTimeLeft > 0) {
     const t = Math.min(1, dashTimeLeft / DASH_DURATION);
+    const asset = ForestAssets.spellEffects.gustStepStreak;
+    const angle = Math.atan2(state.facingY, state.facingX);
     ctx.save();
-    ctx.globalAlpha = 0.4 * t;
-    ctx.beginPath();
-    ctx.ellipse(
-      screenX - state.facingX * radius * 1.6,
-      screenY - state.facingY * radius * 1.6,
-      radius * 1.1,
-      radius * 0.55,
-      Math.atan2(state.facingY, state.facingX),
-      0,
-      Math.PI * 2
-    );
-    ctx.fillStyle = "#f0e6b0";
-    ctx.fill();
+    ctx.globalAlpha = t;
+    ctx.translate(screenX - state.facingX * radius * 0.6, screenY - state.facingY * radius * 0.6);
+    ctx.rotate(angle);
+    ctx.drawImage(asset.image, -asset.width, -asset.height / 2, asset.width, asset.height);
     ctx.restore();
   }
 
