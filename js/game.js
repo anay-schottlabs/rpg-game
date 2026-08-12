@@ -33,6 +33,13 @@ window.addEventListener("keyup", (e) => {
   if (key in keys) keys[key] = false;
 });
 
+// `keys` is declared with `const` at the top level of a classic script, so
+// (unlike `var`) it does NOT automatically become `window.keys` — but the
+// multiplayer module scripts need to read it, and modules can only see true
+// globals. This is one of a handful of explicit bridges across that
+// classic-script/module boundary; see js/multiplayer/peer-sync.js.
+window.keys = keys;
+
 // --- World shape -------------------------------------------------------------
 
 // The world is a circle, not a rectangle. Movement is capped well short of
@@ -52,14 +59,15 @@ function distFromCenter(x, y) {
   return Math.hypot(x - WORLD_CENTER.x, y - WORLD_CENTER.y);
 }
 
-// Uniform-area sample of an annulus around the world center.
+// Uniform-area sample of an annulus around the world center. Routed through
+// RNG (see js/rng.js) rather than bare Math.random() because everything
+// world generation touches must be reproducible from a shared seed so every
+// player in a multiplayer session generates an identical world.
 function sampleAnnulus(rMin, rMax) {
-  const r = Math.sqrt(rMin * rMin + Math.random() * (rMax * rMax - rMin * rMin));
-  const theta = Math.random() * Math.PI * 2;
+  const r = Math.sqrt(rMin * rMin + RNG.random() * (rMax * rMax - rMin * rMin));
+  const theta = RNG.random() * Math.PI * 2;
   return { x: WORLD_CENTER.x + Math.cos(theta) * r, y: WORLD_CENTER.y + Math.sin(theta) * r };
 }
-
-const spatialIndex = WorldGen.createSpatialIndex(160);
 
 // Places items one at a time, skipping any that fail a density check or land
 // too close to something already placed, and records accepted ones in the
@@ -72,7 +80,7 @@ function scatterWithDensity({ count, maxAttempts, sample, densityAt, footprintRa
     const { x, y } = sample();
     const density = densityAt ? densityAt(x, y) : 1;
     if (density <= 0) continue;
-    if (density < 1 && Math.random() > density) continue;
+    if (density < 1 && RNG.random() > density) continue;
 
     const item = build(x, y);
     const radius = footprintRadius(item);
@@ -84,15 +92,152 @@ function scatterWithDensity({ count, maxAttempts, sample, densityAt, footprintRa
   return results;
 }
 
-// --- Campfire (spawn point) -----------------------------------------------
+// --- Player movement & rendering (shared with multiplayer) -----------------
 
-const campfire = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, scale: 1, flip: false };
-spatialIndex.insert(campfire.x, campfire.y, 100);
+const PLAYER_BASE_SPEED = 220; // pixels per second
+const DASH_SPEED_MULTIPLIER = 2.6;
+const DASH_DURATION = 0.18; // seconds the burst itself lasts
+const DASH_COOLDOWN = 0.6; // seconds before another dash can start
+const CAST_SPEED_MULTIPLIER = 0.12; // drastic slowdown while channeling a spell
 
-// --- Trees -----------------------------------------------------------------
+// Pure movement step used by both the local Player class below AND, in
+// multiplayer, js/multiplayer/host-sim.js — which drives every remote
+// player through this exact same function every frame so movement rules
+// are identical no matter who's simulating whom. `state` is mutated in
+// place ({x,y,facingX,facingY,dashTimeLeft,dashCooldownLeft,isCasting}).
+// `input` is {dx,dy,shift,e} where dx/dy are raw -1/0/1 axis intent.
+function simulatePlayerMovement(state, input, dt) {
+  const hasInput = input.dx !== 0 || input.dy !== 0;
+  state.isCasting = input.e;
+
+  if (state.dashCooldownLeft > 0) state.dashCooldownLeft -= dt;
+  if (state.dashTimeLeft > 0) state.dashTimeLeft -= dt;
+
+  if (hasInput) {
+    // Normalize so diagonal movement isn't faster, and keep the exact
+    // (possibly diagonal) direction for the facing indicator.
+    const len = Math.hypot(input.dx, input.dy);
+    const dx = input.dx / len;
+    const dy = input.dy / len;
+    state.facingX = dx;
+    state.facingY = dy;
+
+    // Holding shift while moving triggers a quick speed burst, capped by a
+    // cooldown. Casting locks that out — you plant your feet to channel.
+    if (!state.isCasting && input.shift && state.dashCooldownLeft <= 0) {
+      state.dashTimeLeft = DASH_DURATION;
+      state.dashCooldownLeft = DASH_COOLDOWN;
+    }
+
+    let speed = state.dashTimeLeft > 0 ? PLAYER_BASE_SPEED * DASH_SPEED_MULTIPLIER : PLAYER_BASE_SPEED;
+    if (state.isCasting) speed = PLAYER_BASE_SPEED * CAST_SPEED_MULTIPLIER;
+
+    state.x += dx * speed * dt;
+    state.y += dy * speed * dt;
+  }
+
+  const dist = distFromCenter(state.x, state.y);
+  if (dist > PLAYER_MAX_RADIUS) {
+    const scale = PLAYER_MAX_RADIUS / dist;
+    state.x = WORLD_CENTER.x + (state.x - WORLD_CENTER.x) * scale;
+    state.y = WORLD_CENTER.y + (state.y - WORLD_CENTER.y) * scale;
+  }
+}
+window.simulatePlayerMovement = simulatePlayerMovement; // bridge for host-sim.js
+
+// Shared visual for any player-shaped thing: the local player, or a remote
+// player rendered from multiplayer state. `state` needs at minimum
+// {x,y,facingX,facingY}; radius/color/dashTimeLeft/isCasting are optional.
+function drawPlayerLike(ctx, camera, state) {
+  const screenX = state.x - camera.x;
+  const screenY = state.y - camera.y;
+  const radius = state.radius || 14;
+  const color = state.color || "#e0b64a";
+
+  // Shadow
+  ctx.beginPath();
+  ctx.ellipse(screenX, screenY + radius * 0.7, radius * 0.8, radius * 0.35, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+  ctx.fill();
+
+  // Dash streak — fades out behind the player over the burst's duration.
+  const dashTimeLeft = state.dashTimeLeft || 0;
+  if (dashTimeLeft > 0) {
+    const t = Math.min(1, dashTimeLeft / DASH_DURATION);
+    ctx.save();
+    ctx.globalAlpha = 0.4 * t;
+    ctx.beginPath();
+    ctx.ellipse(
+      screenX - state.facingX * radius * 1.6,
+      screenY - state.facingY * radius * 1.6,
+      radius * 1.1,
+      radius * 0.55,
+      Math.atan2(state.facingY, state.facingX),
+      0,
+      Math.PI * 2
+    );
+    ctx.fillStyle = "#f0e6b0";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Body
+  ctx.beginPath();
+  ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = "#5a3d1c";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Facing indicator — follows the exact movement vector (including
+  // diagonals), so it sits on a corner rather than snapping to a side.
+  ctx.beginPath();
+  ctx.arc(screenX + state.facingX * radius * 0.6, screenY + state.facingY * radius * 0.6, 3, 0, Math.PI * 2);
+  ctx.fillStyle = "#3a2a10";
+  ctx.fill();
+}
+
+class Player {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = 14;
+    this.facingX = 0;
+    this.facingY = 1; // default: facing down
+    this.color = "#e0b64a";
+    this.dashTimeLeft = 0;
+    this.dashCooldownLeft = 0;
+    this.isCasting = false;
+  }
+
+  update(dt) {
+    const input = {
+      dx: (keys.d ? 1 : 0) - (keys.a ? 1 : 0),
+      dy: (keys.s ? 1 : 0) - (keys.w ? 1 : 0),
+      shift: keys.shift,
+      e: keys.e,
+    };
+    simulatePlayerMovement(this, input, dt);
+  }
+
+  draw(ctx, camera) {
+    drawPlayerLike(ctx, camera, this);
+  }
+}
+
+// --- World generation (deferred) --------------------------------------------
+
+// Nothing below is generated at load time anymore — it all depends on RNG,
+// which must be seeded first (solo play seeds it with real randomness;
+// hosting/joining seeds it with a shared value so everyone's world matches).
+// js/lobby.js calls window.startGame() once a mode has been chosen.
+let spatialIndex, terrainNoise;
+let trees, foliage, mushrooms, rocks, ambientDetails;
+let campfire, player;
 
 function pickTreeType() {
-  const r = Math.random();
+  const r = RNG.random();
   if (r < 0.7) return "common";
   if (r < 0.92) return "elder";
   return "dead";
@@ -112,37 +257,8 @@ function treeRingDensity(x, y) {
   return 1;
 }
 
-const trees = scatterWithDensity({
-  count: 550,
-  maxAttempts: 550 * 12,
-  sample: () => sampleAnnulus(CLEARING_RADIUS, WALL_START),
-  densityAt: treeRingDensity,
-  footprintRadius: treeFootprintRadius,
-  overlapAllowance: 0.8,
-  build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.75 + Math.random() * 0.55 }),
-});
-
-// Boundary wall: deliberately denser and packed tighter (looser overlap
-// allowance) than the interior, so the world edge reads as thick forest
-// that keeps going rather than a place where the trees just stop.
-trees.push(...scatterWithDensity({
-  count: 1300,
-  maxAttempts: 1300 * 15,
-  sample: () => sampleAnnulus(WALL_START, WALL_END),
-  footprintRadius: treeFootprintRadius,
-  overlapAllowance: 0.42,
-  build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.8 + Math.random() * 0.55 }),
-}));
-
-// --- Foliage -----------------------------------------------------------------
-
-// A low-frequency noise field drives how lush or barren any given patch of
-// the interior forest floor is, so foliage naturally clumps into meadows
-// and clearings instead of spraying evenly.
-const terrainNoise = WorldGen.createValueNoise2D();
-
 function pickFoliageType() {
-  const r = Math.random();
+  const r = RNG.random();
   if (r < 0.08) return "bush";
   if (r < 0.45) return "tallGrass";
   if (r < 0.75) return "fern";
@@ -150,11 +266,11 @@ function pickFoliageType() {
 }
 
 function pickClearingFoliageType() {
-  return Math.random() < 0.6 ? "tallGrass" : "flowers";
+  return RNG.random() < 0.6 ? "tallGrass" : "flowers";
 }
 
 function pickWallFoliageType() {
-  const r = Math.random();
+  const r = RNG.random();
   if (r < 0.35) return "bush";
   if (r < 0.75) return "tallGrass";
   return "fern";
@@ -165,67 +281,8 @@ function foliageFootprintRadius(item) {
   return ((asset.width * item.scale) / 2) * 0.7;
 }
 
-const foliage = [];
-
-// A few sparse tufts right around the campfire — no shrubs, just enough to
-// not look bare.
-foliage.push(...scatterWithDensity({
-  count: 14,
-  maxAttempts: 14 * 15,
-  sample: () => sampleAnnulus(40, CLEARING_RADIUS - 20),
-  footprintRadius: foliageFootprintRadius,
-  overlapAllowance: 0.5,
-  build: (x, y) => ({ x, y, type: pickClearingFoliageType(), scale: 0.7 + Math.random() * 0.3, flip: Math.random() < 0.5 }),
-}));
-
-// Interior forest floor: noise-gated patchiness (lush meadows, barren gaps).
-foliage.push(...scatterWithDensity({
-  count: 420,
-  maxAttempts: 420 * 10,
-  sample: () => sampleAnnulus(CLEARING_RADIUS + 40, WALL_START),
-  densityAt: (x, y) => {
-    const density = terrainNoise(x / 260, y / 260);
-    if (density < 0.42) return 0;
-    return Math.min(1, (density - 0.42) / 0.58 + 0.2);
-  },
-  footprintRadius: foliageFootprintRadius,
-  overlapAllowance: 0.55,
-  build: (x, y) => ({ x, y, type: pickFoliageType(), scale: 0.8 + Math.random() * 0.35, flip: Math.random() < 0.5 }),
-}));
-
-// A handful of tight flower clusters layered on top — flowers tend to bloom
-// in small clumps rather than singly.
-for (let c = 0; c < 8; c++) {
-  const center = sampleAnnulus(CLEARING_RADIUS + 40, WALL_START);
-  const n = 3 + Math.floor(Math.random() * 4);
-  for (let i = 0; i < n; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = Math.random() * Math.random() * 40;
-    const x = center.x + Math.cos(angle) * dist;
-    const y = center.y + Math.sin(angle) * dist;
-    const item = { x, y, type: "flowers", scale: 0.8 + Math.random() * 0.3, flip: Math.random() < 0.5 };
-    const radius = foliageFootprintRadius(item);
-    if (spatialIndex.hasOverlap(x, y, radius, 0.5)) continue;
-    spatialIndex.insert(x, y, radius);
-    foliage.push(item);
-  }
-}
-
-// Boundary wall: dense low cover so gaps between wall-tree trunks don't
-// leave sightlines through to whatever (nothing) is beyond.
-foliage.push(...scatterWithDensity({
-  count: 1000,
-  maxAttempts: 1000 * 12,
-  sample: () => sampleAnnulus(WALL_START, WALL_END),
-  footprintRadius: foliageFootprintRadius,
-  overlapAllowance: 0.4,
-  build: (x, y) => ({ x, y, type: pickWallFoliageType(), scale: 0.9 + Math.random() * 0.4, flip: Math.random() < 0.5 }),
-}));
-
-// --- Mushrooms -----------------------------------------------------------------
-
 function pickMushroomType() {
-  const r = Math.random();
+  const r = RNG.random();
   if (r < 0.35) return "redCap";
   if (r < 0.65) return "tawnyCap";
   if (r < 0.85) return "blueCap";
@@ -237,75 +294,19 @@ function mushroomFootprintRadius(item) {
   return ((asset.width * item.scale) / 2) * 0.7;
 }
 
-const mushrooms = [];
-for (let c = 0; c < 16; c++) {
-  const center = sampleAnnulus(CLEARING_RADIUS + 60, WALL_START);
-  const n = 2 + Math.floor(Math.random() * 3);
-  for (let i = 0; i < n; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = Math.random() * Math.random() * 30;
-    const x = center.x + Math.cos(angle) * dist;
-    const y = center.y + Math.sin(angle) * dist;
-    if (distFromCenter(x, y) < CLEARING_RADIUS) continue;
-    const item = { x, y, type: pickMushroomType(), scale: 0.85 + Math.random() * 0.3, flip: Math.random() < 0.5 };
-    const radius = mushroomFootprintRadius(item);
-    if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
-    spatialIndex.insert(x, y, radius);
-    mushrooms.push(item);
-  }
-}
-mushrooms.push(...scatterWithDensity({
-  count: 24,
-  maxAttempts: 24 * 15,
-  sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
-  footprintRadius: mushroomFootprintRadius,
-  overlapAllowance: 0.55,
-  build: (x, y) => ({ x, y, type: pickMushroomType(), scale: 0.85 + Math.random() * 0.3, flip: Math.random() < 0.5 }),
-}));
-
-// --- Rocks -----------------------------------------------------------------------
-
 function pickRockVariant() {
-  const r = Math.random();
+  const r = RNG.random();
   const size = r < 0.55 ? "small" : r < 0.85 ? "medium" : "large";
   const pool = ForestAssets.rocks.filter((v) => v.size === size);
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool[Math.floor(RNG.random() * pool.length)];
 }
 
 function rockFootprintRadius(item) {
   return ((item.variant.width * item.scale) / 2) * 0.55;
 }
 
-const rocks = [];
-for (let c = 0; c < 18; c++) {
-  const center = sampleAnnulus(CLEARING_RADIUS + 60, WALL_START);
-  const n = 2 + Math.floor(Math.random() * 4);
-  for (let i = 0; i < n; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = Math.random() * Math.random() * 45;
-    const x = center.x + Math.cos(angle) * dist;
-    const y = center.y + Math.sin(angle) * dist;
-    if (distFromCenter(x, y) < CLEARING_RADIUS) continue;
-    const item = { x, y, variant: pickRockVariant(), scale: 0.75 + Math.random() * 0.35, flip: Math.random() < 0.5 };
-    const radius = rockFootprintRadius(item);
-    if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
-    spatialIndex.insert(x, y, radius);
-    rocks.push(item);
-  }
-}
-rocks.push(...scatterWithDensity({
-  count: 26,
-  maxAttempts: 26 * 15,
-  sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
-  footprintRadius: rockFootprintRadius,
-  overlapAllowance: 0.55,
-  build: (x, y) => ({ x, y, variant: pickRockVariant(), scale: 0.75 + Math.random() * 0.35, flip: Math.random() < 0.5 }),
-}));
-
-// --- Ambient details -----------------------------------------------------------
-
 function pickAmbientType() {
-  const r = Math.random();
+  const r = RNG.random();
   if (r < 0.4) return "fallenLog";
   if (r < 0.7) return "stump";
   return "twigPile";
@@ -316,132 +317,166 @@ function ambientFootprintRadius(item) {
   return ((asset.width * item.scale) / 2) * 0.6;
 }
 
-const ambientDetails = scatterWithDensity({
-  count: 60,
-  maxAttempts: 60 * 15,
-  sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
-  footprintRadius: ambientFootprintRadius,
-  overlapAllowance: 0.55,
-  build: (x, y) => ({ x, y, type: pickAmbientType(), scale: 0.85 + Math.random() * 0.3, flip: Math.random() < 0.5 }),
-});
+function generateWorld() {
+  spatialIndex = WorldGen.createSpatialIndex(160);
+  terrainNoise = WorldGen.createValueNoise2D();
 
-// --- Player ------------------------------------------------------------------
+  // --- Campfire (spawn point) ---
+  campfire = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, scale: 1, flip: false };
+  spatialIndex.insert(campfire.x, campfire.y, 100);
+  // host-sim.js needs the campfire position to spawn newly-joined peers near
+  // it; see the window.keys comment above for why this explicit bridge exists.
+  window.campfire = campfire;
 
-const DASH_SPEED_MULTIPLIER = 2.6;
-const DASH_DURATION = 0.18; // seconds the burst itself lasts
-const DASH_COOLDOWN = 0.6; // seconds before another dash can start
-const CAST_SPEED_MULTIPLIER = 0.12; // drastic slowdown while channeling a spell
+  // --- Trees ---
+  trees = scatterWithDensity({
+    count: 550,
+    maxAttempts: 550 * 12,
+    sample: () => sampleAnnulus(CLEARING_RADIUS, WALL_START),
+    densityAt: treeRingDensity,
+    footprintRadius: treeFootprintRadius,
+    overlapAllowance: 0.8,
+    build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.75 + RNG.random() * 0.55 }),
+  });
 
-class Player {
-  constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    this.radius = 14;
-    this.speed = 220; // pixels per second
-    this.facingX = 0;
-    this.facingY = 1; // default: facing down
-    this.color = "#e0b64a";
-    this.dashTimeLeft = 0;
-    this.dashCooldownLeft = 0;
-    this.isCasting = false;
+  // Boundary wall: deliberately denser and packed tighter (looser overlap
+  // allowance) than the interior, so the world edge reads as thick forest
+  // that keeps going rather than a place where the trees just stop.
+  trees.push(...scatterWithDensity({
+    count: 1300,
+    maxAttempts: 1300 * 15,
+    sample: () => sampleAnnulus(WALL_START, WALL_END),
+    footprintRadius: treeFootprintRadius,
+    overlapAllowance: 0.42,
+    build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.8 + RNG.random() * 0.55 }),
+  }));
+
+  // --- Foliage ---
+  foliage = [];
+
+  // A few sparse tufts right around the campfire — no shrubs.
+  foliage.push(...scatterWithDensity({
+    count: 14,
+    maxAttempts: 14 * 15,
+    sample: () => sampleAnnulus(40, CLEARING_RADIUS - 20),
+    footprintRadius: foliageFootprintRadius,
+    overlapAllowance: 0.5,
+    build: (x, y) => ({ x, y, type: pickClearingFoliageType(), scale: 0.7 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
+  }));
+
+  // Interior forest floor: noise-gated patchiness (lush meadows, barren gaps).
+  foliage.push(...scatterWithDensity({
+    count: 420,
+    maxAttempts: 420 * 10,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 40, WALL_START),
+    densityAt: (x, y) => {
+      const density = terrainNoise(x / 260, y / 260);
+      if (density < 0.42) return 0;
+      return Math.min(1, (density - 0.42) / 0.58 + 0.2);
+    },
+    footprintRadius: foliageFootprintRadius,
+    overlapAllowance: 0.55,
+    build: (x, y) => ({ x, y, type: pickFoliageType(), scale: 0.8 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
+  }));
+
+  // A handful of tight flower clusters layered on top.
+  for (let c = 0; c < 8; c++) {
+    const center = sampleAnnulus(CLEARING_RADIUS + 40, WALL_START);
+    const n = 3 + Math.floor(RNG.random() * 4);
+    for (let i = 0; i < n; i++) {
+      const angle = RNG.random() * Math.PI * 2;
+      const dist = RNG.random() * RNG.random() * 40;
+      const x = center.x + Math.cos(angle) * dist;
+      const y = center.y + Math.sin(angle) * dist;
+      const item = { x, y, type: "flowers", scale: 0.8 + RNG.random() * 0.3, flip: RNG.random() < 0.5 };
+      const radius = foliageFootprintRadius(item);
+      if (spatialIndex.hasOverlap(x, y, radius, 0.5)) continue;
+      spatialIndex.insert(x, y, radius);
+      foliage.push(item);
+    }
   }
 
-  update(dt) {
-    let dx = 0;
-    let dy = 0;
+  // Boundary wall: dense low cover so gaps between wall-tree trunks don't
+  // leave sightlines through to whatever (nothing) is beyond.
+  foliage.push(...scatterWithDensity({
+    count: 1000,
+    maxAttempts: 1000 * 12,
+    sample: () => sampleAnnulus(WALL_START, WALL_END),
+    footprintRadius: foliageFootprintRadius,
+    overlapAllowance: 0.4,
+    build: (x, y) => ({ x, y, type: pickWallFoliageType(), scale: 0.9 + RNG.random() * 0.4, flip: RNG.random() < 0.5 }),
+  }));
 
-    if (keys.w) dy -= 1;
-    if (keys.s) dy += 1;
-    if (keys.a) dx -= 1;
-    if (keys.d) dx += 1;
-
-    const hasInput = dx !== 0 || dy !== 0;
-    this.isCasting = keys.e;
-
-    if (this.dashCooldownLeft > 0) this.dashCooldownLeft -= dt;
-    if (this.dashTimeLeft > 0) this.dashTimeLeft -= dt;
-
-    if (hasInput) {
-      // Normalize so diagonal movement isn't faster, and keep the exact
-      // (possibly diagonal) direction for the facing indicator below.
-      const len = Math.hypot(dx, dy);
-      dx /= len;
-      dy /= len;
-      this.facingX = dx;
-      this.facingY = dy;
-
-      // Holding shift while moving triggers a quick speed burst, capped by
-      // a cooldown so it can't just be held down for a permanent sprint.
-      // Casting locks that out — you plant your feet to channel a spell.
-      if (!this.isCasting && keys.shift && this.dashCooldownLeft <= 0) {
-        this.dashTimeLeft = DASH_DURATION;
-        this.dashCooldownLeft = DASH_COOLDOWN;
-      }
-
-      let speed = this.dashTimeLeft > 0 ? this.speed * DASH_SPEED_MULTIPLIER : this.speed;
-      if (this.isCasting) speed = this.speed * CAST_SPEED_MULTIPLIER;
-
-      this.x += dx * speed * dt;
-      this.y += dy * speed * dt;
-    }
-
-    const dist = distFromCenter(this.x, this.y);
-    if (dist > PLAYER_MAX_RADIUS) {
-      const scale = PLAYER_MAX_RADIUS / dist;
-      this.x = WORLD_CENTER.x + (this.x - WORLD_CENTER.x) * scale;
-      this.y = WORLD_CENTER.y + (this.y - WORLD_CENTER.y) * scale;
+  // --- Mushrooms ---
+  mushrooms = [];
+  for (let c = 0; c < 16; c++) {
+    const center = sampleAnnulus(CLEARING_RADIUS + 60, WALL_START);
+    const n = 2 + Math.floor(RNG.random() * 3);
+    for (let i = 0; i < n; i++) {
+      const angle = RNG.random() * Math.PI * 2;
+      const dist = RNG.random() * RNG.random() * 30;
+      const x = center.x + Math.cos(angle) * dist;
+      const y = center.y + Math.sin(angle) * dist;
+      if (distFromCenter(x, y) < CLEARING_RADIUS) continue;
+      const item = { x, y, type: pickMushroomType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 };
+      const radius = mushroomFootprintRadius(item);
+      if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
+      spatialIndex.insert(x, y, radius);
+      mushrooms.push(item);
     }
   }
+  mushrooms.push(...scatterWithDensity({
+    count: 24,
+    maxAttempts: 24 * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
+    footprintRadius: mushroomFootprintRadius,
+    overlapAllowance: 0.55,
+    build: (x, y) => ({ x, y, type: pickMushroomType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
+  }));
 
-  draw(ctx, camera) {
-    const screenX = this.x - camera.x;
-    const screenY = this.y - camera.y;
-
-    // Shadow
-    ctx.beginPath();
-    ctx.ellipse(screenX, screenY + this.radius * 0.7, this.radius * 0.8, this.radius * 0.35, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-    ctx.fill();
-
-    // Dash streak — fades out behind the player over the burst's duration.
-    if (this.dashTimeLeft > 0) {
-      const t = this.dashTimeLeft / DASH_DURATION;
-      ctx.save();
-      ctx.globalAlpha = 0.4 * t;
-      ctx.beginPath();
-      ctx.ellipse(
-        screenX - this.facingX * this.radius * 1.6,
-        screenY - this.facingY * this.radius * 1.6,
-        this.radius * 1.1,
-        this.radius * 0.55,
-        Math.atan2(this.facingY, this.facingX),
-        0,
-        Math.PI * 2
-      );
-      ctx.fillStyle = "#f0e6b0";
-      ctx.fill();
-      ctx.restore();
+  // --- Rocks ---
+  rocks = [];
+  for (let c = 0; c < 18; c++) {
+    const center = sampleAnnulus(CLEARING_RADIUS + 60, WALL_START);
+    const n = 2 + Math.floor(RNG.random() * 4);
+    for (let i = 0; i < n; i++) {
+      const angle = RNG.random() * Math.PI * 2;
+      const dist = RNG.random() * RNG.random() * 45;
+      const x = center.x + Math.cos(angle) * dist;
+      const y = center.y + Math.sin(angle) * dist;
+      if (distFromCenter(x, y) < CLEARING_RADIUS) continue;
+      const item = { x, y, variant: pickRockVariant(), scale: 0.75 + RNG.random() * 0.35, flip: RNG.random() < 0.5 };
+      const radius = rockFootprintRadius(item);
+      if (spatialIndex.hasOverlap(x, y, radius, 0.55)) continue;
+      spatialIndex.insert(x, y, radius);
+      rocks.push(item);
     }
-
-    // Body
-    ctx.beginPath();
-    ctx.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
-    ctx.fillStyle = this.color;
-    ctx.fill();
-    ctx.strokeStyle = "#5a3d1c";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Facing indicator — follows the exact movement vector (including
-    // diagonals), so it sits on a corner rather than snapping to a side.
-    ctx.beginPath();
-    ctx.arc(screenX + this.facingX * this.radius * 0.6, screenY + this.facingY * this.radius * 0.6, 3, 0, Math.PI * 2);
-    ctx.fillStyle = "#3a2a10";
-    ctx.fill();
   }
+  rocks.push(...scatterWithDensity({
+    count: 26,
+    maxAttempts: 26 * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
+    footprintRadius: rockFootprintRadius,
+    overlapAllowance: 0.55,
+    build: (x, y) => ({ x, y, variant: pickRockVariant(), scale: 0.75 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
+  }));
+
+  // --- Ambient details ---
+  ambientDetails = scatterWithDensity({
+    count: 60,
+    maxAttempts: 60 * 15,
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
+    footprintRadius: ambientFootprintRadius,
+    overlapAllowance: 0.55,
+    build: (x, y) => ({ x, y, type: pickAmbientType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
+  });
+
+  // --- Player ---
+  player = new Player(campfire.x, campfire.y + 110);
+  // multiplayer/host-sim.js needs the host's own player to fold into its
+  // broadcast snapshot; see the window.keys comment above.
+  window.player = player;
 }
-
-const player = new Player(campfire.x, campfire.y + 110);
 
 // --- Camera ------------------------------------------------------------------
 
@@ -536,22 +571,46 @@ function drawCampfire(item, camera) {
 
 // --- Game loop -----------------------------------------------------------------
 
-let lastTime = performance.now();
+let lastTime;
 
 function loop(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05); // clamp for tab-switch stalls
   lastTime = now;
 
-  player.update(dt);
+  // window.Multiplayer only exists once js/multiplayer/multiplayer.js (a
+  // deferred module script) has loaded — guard every reference to it. In
+  // solo play it's simply never set, and everything below behaves exactly
+  // as it did before multiplayer existed.
+  const mp = window.Multiplayer;
+  const isPeer = mp && mp.mode === "peer";
+
+  if (isPeer) {
+    // Strict host authority: our own avatar is rendered from the host's
+    // broadcast rather than simulated locally (see js/multiplayer/peer-sync.js).
+    // We still forward local input to the host every frame.
+    mp.update(dt);
+    const localState = mp.getLocalOverride();
+    if (localState) {
+      player.x = localState.x;
+      player.y = localState.y;
+      player.facingX = localState.facingX;
+      player.facingY = localState.facingY;
+      player.isCasting = localState.isCasting;
+      player.dashTimeLeft = localState.isDashing ? DASH_DURATION : 0;
+    }
+  } else {
+    player.update(dt);
+    if (mp) mp.update(dt); // host: steps every remote player and broadcasts
+  }
+
   updateCamera();
 
-  // Quick-reference spellbook: only while actively casting, so it can't be
-  // pulled up as a free pause-and-read menu outside of that context.
-  spellbookEl.classList.toggle("visible", player.isCasting && keys.q);
-
-  // Ease toward the cast zoom rather than snapping, so entering/leaving
-  // spellcasting reads as a deliberate push-in rather than a jump cut.
-  const targetZoom = player.isCasting ? CAST_ZOOM : 1;
+  // Zoom and the spellbook reference are purely local UI feedback for the
+  // person pressing E/Q — they read the raw key state directly rather than
+  // the (possibly host-delayed) simulated `isCasting`, so they stay instant
+  // regardless of network mode.
+  spellbookEl.classList.toggle("visible", keys.e && keys.q);
+  const targetZoom = keys.e ? CAST_ZOOM : 1;
   camera.zoom += (targetZoom - camera.zoom) * Math.min(1, dt * ZOOM_APPROACH_RATE);
 
   // The player is always drawn at canvas center, so scaling around that
@@ -563,9 +622,8 @@ function loop(now) {
 
   drawGround();
 
-  // Depth-sort every ground object and the player by world y so the player
-  // (and taller decoration) can convincingly pass in front of or behind
-  // shorter/closer objects.
+  // Depth-sort every ground object, remote players, and the local player by
+  // world y so nearer/taller things convincingly occlude farther ones.
   const drawables = [];
   drawables.push({ y: campfire.y, kind: "campfire", item: campfire });
   for (const tree of trees) drawables.push({ y: tree.y, kind: "tree", item: tree });
@@ -573,6 +631,11 @@ function loop(now) {
   for (const item of mushrooms) drawables.push({ y: item.y, kind: "mushroom", item });
   for (const item of rocks) drawables.push({ y: item.y, kind: "rock", item });
   for (const item of ambientDetails) drawables.push({ y: item.y, kind: "ambient", item });
+  if (mp) {
+    for (const remote of mp.getRemotePlayers()) {
+      drawables.push({ y: remote.y, kind: "remote", item: remote });
+    }
+  }
   drawables.push({ y: player.y, kind: "player", item: null });
 
   drawables.sort((a, b) => a.y - b.y);
@@ -585,6 +648,7 @@ function loop(now) {
       case "rock": drawRock(d.item, camera); break;
       case "ambient": drawAmbient(d.item, camera); break;
       case "campfire": drawCampfire(d.item, camera); break;
+      case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
       case "player": player.draw(ctx, camera); break;
     }
   }
@@ -594,4 +658,13 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-requestAnimationFrame(loop);
+// Entry point — called by js/lobby.js once the player has chosen solo/host/
+// join and (for host/join) RNG has been seeded appropriately. Everything
+// above this point is safe to load eagerly; everything the game actually
+// *does* waits here.
+function startGame() {
+  generateWorld();
+  lastTime = performance.now();
+  requestAnimationFrame(loop);
+}
+window.startGame = startGame; // bridge for js/lobby.js and js/multiplayer/multiplayer.js

@@ -11,7 +11,7 @@ const WorldGen = (() => {
     const perm = new Uint8Array(size);
     for (let i = 0; i < size; i++) perm[i] = i;
     for (let i = size - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(RNG.random() * (i + 1));
       [perm[i], perm[j]] = [perm[j], perm[i]];
     }
 
@@ -46,15 +46,15 @@ const WorldGen = (() => {
   function scatterPatchy({ worldWidth, worldHeight, attempts, noiseFn, noiseScale, threshold = 0.4 }) {
     const points = [];
     for (let i = 0; i < attempts; i++) {
-      const x = Math.random() * worldWidth;
-      const y = Math.random() * worldHeight;
+      const x = RNG.random() * worldWidth;
+      const y = RNG.random() * worldHeight;
       const density = noiseFn(x / noiseScale, y / noiseScale);
       if (density < threshold) continue; // barren patch, skip entirely
 
       // Soft falloff just above the threshold so patch edges thin out
       // gradually instead of cutting off in a hard ring.
       const chance = (density - threshold) / (1 - threshold);
-      if (Math.random() > chance + 0.2) continue;
+      if (RNG.random() > chance + 0.2) continue;
 
       points.push({ x, y, density });
     }
@@ -64,12 +64,12 @@ const WorldGen = (() => {
   function scatterClusters({ worldWidth, worldHeight, clusterCount, itemsPerCluster, clusterRadius, soloCount = 0 }) {
     const points = [];
     for (let c = 0; c < clusterCount; c++) {
-      const cx = Math.random() * worldWidth;
-      const cy = Math.random() * worldHeight;
-      const n = itemsPerCluster.min + Math.floor(Math.random() * (itemsPerCluster.max - itemsPerCluster.min + 1));
+      const cx = RNG.random() * worldWidth;
+      const cy = RNG.random() * worldHeight;
+      const n = itemsPerCluster.min + Math.floor(RNG.random() * (itemsPerCluster.max - itemsPerCluster.min + 1));
       for (let i = 0; i < n; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const dist = Math.random() * Math.random() * clusterRadius; // bias toward cluster center
+        const angle = RNG.random() * Math.PI * 2;
+        const dist = RNG.random() * RNG.random() * clusterRadius; // bias toward cluster center
         points.push({
           x: Math.min(worldWidth, Math.max(0, cx + Math.cos(angle) * dist)),
           y: Math.min(worldHeight, Math.max(0, cy + Math.sin(angle) * dist)),
@@ -77,7 +77,7 @@ const WorldGen = (() => {
       }
     }
     for (let i = 0; i < soloCount; i++) {
-      points.push({ x: Math.random() * worldWidth, y: Math.random() * worldHeight });
+      points.push({ x: RNG.random() * worldWidth, y: RNG.random() * worldHeight });
     }
     return points;
   }
