@@ -238,6 +238,15 @@ function sampleAnnulus(rMin, rMax) {
   return { x: WORLD_CENTER.x + Math.cos(theta) * r, y: WORLD_CENTER.y + Math.sin(theta) * r };
 }
 
+// Same idea as sampleAnnulus, but restricted to one angular wedge — used to
+// scatter each outlying biome's own content only within its own pie slice
+// (see "--- Biomes ---" below).
+function sampleSectorAnnulus(rMin, rMax, angleStart, angleEnd) {
+  const r = Math.sqrt(rMin * rMin + RNG.random() * (rMax * rMax - rMin * rMin));
+  const theta = angleStart + RNG.random() * (angleEnd - angleStart);
+  return { x: WORLD_CENTER.x + Math.cos(theta) * r, y: WORLD_CENTER.y + Math.sin(theta) * r };
+}
+
 // Places items one at a time, skipping any that fail a density check or land
 // too close to something already placed, and records accepted ones in the
 // shared spatial index so later categories avoid them too.
@@ -685,7 +694,7 @@ function generateHealingPools() {
   let attempts = 0;
   while (healingPools.length < HEALING_POOL_COUNT && attempts < HEALING_POOL_COUNT * 40) {
     attempts++;
-    const p = sampleAnnulus(CLEARING_RADIUS + 200, WALL_START);
+    const p = sampleAnnulus(CLEARING_RADIUS + 200, BIOME_INNER_RADIUS);
     if (isPointInWater(p.x, p.y)) continue;
     if (spatialIndex.hasOverlap(p.x, p.y, HEALING_POOL_RADIUS, 0.9)) continue;
     const seed = RNG.random() * 100;
@@ -892,122 +901,171 @@ class Player {
   }
 }
 
-// --- Golems ------------------------------------------------------------------
+// --- Enemies -------------------------------------------------------------------
 
-// Local-only simulation: every client runs its own golem AI against its own
-// local player, rather than the host broadcasting golem state like it does
+// Local-only simulation: every client runs its own enemy AI against its own
+// local player, rather than the host broadcasting enemy state like it does
 // for players. Spawn points come from the seeded RNG during world
 // generation (so they line up across a multiplayer session), but the
 // ongoing chase/attack behavior is not synced — a known v1 simplification.
-const GOLEM_COUNT = 3;
-const GOLEM_SCALE = 0.55;
-const GOLEM_MAX_HEALTH = 120;
-const GOLEM_AGGRO_RADIUS = 420; // focus: start chasing once the player is this close
-const GOLEM_LEASH_RADIUS = 650; // unfocus: give up once the player (or the golem itself) strays this far
-const GOLEM_ATTACK_RANGE = 70;
-const GOLEM_ATTACK_WINDUP = 0.5; // telegraph before the hit lands
-const GOLEM_ATTACK_COOLDOWN = 1.6; // total time in the "attacking" state, windup included
-const GOLEM_ATTACK_DAMAGE = 8;
-const GOLEM_SPEED = 70; // slower than the player — lumbering, not chaseable-proof
-const GOLEM_RESPAWN_MS = 20000;
+//
+// One dedicated enemy per biome (see "--- Biomes ---" below). The
+// idle/chasing/attacking/dead state machine (aggro/leash, attack
+// windup/cooldown) is identical for all of them and lives in updateEnemy()
+// below, driven entirely by the stats here — only the rig/animation/render
+// differs per body plan (the family-specific draw*Enemy functions further
+// down, dispatched by `family`).
+const ENEMY_TYPES = {
+  golem: {
+    displayName: "Rock Golem", biomeId: "woodlandGrove", family: "golem",
+    maxHealth: 120, aggroRadius: 420, leashRadius: 650, attackRange: 70,
+    attackWindup: 0.5, attackCooldown: 1.6, attackDamage: 8, speed: 70,
+    respawnMs: 20000, scale: 0.55, rig: ForestAssets.enemyRigs.golem,
+  },
+  mireLeech: {
+    displayName: "Mire Leech", biomeId: "marshBog", family: "segmentedChain",
+    maxHealth: 55, aggroRadius: 260, leashRadius: 420, attackRange: 55,
+    attackWindup: 0.35, attackCooldown: 1.1, attackDamage: 10, speed: 95,
+    respawnMs: 16000, scale: 0.7, rig: ForestAssets.enemyRigs.mireLeech,
+  },
+  cragRam: {
+    displayName: "Crag Ram", biomeId: "mountainFoothills", family: "quadruped",
+    maxHealth: 100, aggroRadius: 380, leashRadius: 600, attackRange: 75,
+    attackWindup: 0.45, attackCooldown: 1.5, attackDamage: 12, speed: 100,
+    respawnMs: 18000, scale: 0.7, rig: ForestAssets.enemyRigs.cragRam,
+  },
+  frostWisp: {
+    displayName: "Frost Wisp", biomeId: "frostfallTundra", family: "floaty",
+    maxHealth: 65, aggroRadius: 400, leashRadius: 620, attackRange: 65,
+    attackWindup: 0.4, attackCooldown: 1.3, attackDamage: 9, speed: 85,
+    respawnMs: 17000, scale: 0.8, ignoresWater: true, rig: ForestAssets.enemyRigs.frostWisp,
+  },
+  bramblingBoar: {
+    displayName: "Bramble Boar", biomeId: "sunmeadowClearing", family: "quadruped",
+    maxHealth: 90, aggroRadius: 360, leashRadius: 580, attackRange: 70,
+    attackWindup: 0.3, attackCooldown: 1.2, attackDamage: 14, speed: 130,
+    respawnMs: 18000, scale: 0.62, rig: ForestAssets.enemyRigs.bramblingBoar,
+  },
+  crystalCrawler: {
+    displayName: "Crystal Crawler", biomeId: "hollowDeep", family: "radialLegs",
+    maxHealth: 80, aggroRadius: 340, leashRadius: 540, attackRange: 60,
+    attackWindup: 0.4, attackCooldown: 1.4, attackDamage: 11, speed: 90,
+    respawnMs: 17000, scale: 0.62, rig: ForestAssets.enemyRigs.crystalCrawler,
+  },
+};
 
-let golems = [];
+let enemies = [];
 
-function spawnGolems() {
-  golems = [];
+function makeEnemy(kind, x, y) {
+  return {
+    kind,
+    x, y,
+    spawnX: x, spawnY: y,
+    health: ENEMY_TYPES[kind].maxHealth,
+    state: "idle", // "idle" | "chasing" | "attacking" | "dead"
+    facingX: 0,
+    facingY: 1,
+    attackWindup: 0,
+    attackCooldown: 0,
+    animPhase: RNG.random() * 10,
+    deathTimer: 0,
+  };
+}
+
+// Places up to `count` enemies of `kind` using `sample()` for candidate
+// points. Deliberately does NOT consult the world's spatialIndex (unlike
+// the static scatter passes) — by the time enemies spawn, biome trees and
+// foliage have already packed it dense enough that a clear 60px circle is
+// nearly unfindable in a bounded number of attempts. Enemies are mobile and
+// have no movement collision with foliage anyway, so a light check against
+// only their own kind's spawn points (so a group doesn't stack on itself)
+// is enough.
+function spawnEnemyGroup(kind, count, sample) {
+  let placed = 0;
   let attempts = 0;
-  while (golems.length < GOLEM_COUNT && attempts < GOLEM_COUNT * 40) {
+  while (placed < count && attempts < count * 40) {
     attempts++;
-    const p = sampleAnnulus(CLEARING_RADIUS + 300, WALL_START);
+    const p = sample();
     if (isPointInWater(p.x, p.y)) continue;
-    if (spatialIndex.hasOverlap(p.x, p.y, 60, 0.7)) continue;
-    spatialIndex.insert(p.x, p.y, 60);
-    golems.push({
-      x: p.x,
-      y: p.y,
-      spawnX: p.x,
-      spawnY: p.y,
-      health: GOLEM_MAX_HEALTH,
-      state: "idle", // "idle" | "chasing" | "attacking" | "dead"
-      facingX: 0,
-      facingY: 1,
-      attackWindup: 0,
-      attackCooldown: 0,
-      animPhase: RNG.random() * 10,
-      deathTimer: 0,
-    });
+    if (enemies.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 140)) continue;
+    enemies.push(makeEnemy(kind, p.x, p.y));
+    placed++;
   }
 }
 
-function killGolem(golem) {
-  golem.state = "dead";
-  golem.deathTimer = GOLEM_RESPAWN_MS;
+function killEnemy(enemy) {
+  enemy.state = "dead";
+  enemy.deathTimer = ENEMY_TYPES[enemy.kind].respawnMs;
 }
 
-function updateGolem(golem, dt) {
-  if (golem.state === "dead") {
-    golem.deathTimer -= dt * 1000;
-    if (golem.deathTimer <= 0) {
-      golem.health = GOLEM_MAX_HEALTH;
-      golem.x = golem.spawnX;
-      golem.y = golem.spawnY;
-      golem.state = "idle";
+function updateEnemy(enemy, dt) {
+  const type = ENEMY_TYPES[enemy.kind];
+
+  if (enemy.state === "dead") {
+    enemy.deathTimer -= dt * 1000;
+    if (enemy.deathTimer <= 0) {
+      enemy.health = type.maxHealth;
+      enemy.x = enemy.spawnX;
+      enemy.y = enemy.spawnY;
+      enemy.state = "idle";
     }
     return;
   }
 
-  const distToPlayer = Math.hypot(player.x - golem.x, player.y - golem.y);
-  const distFromSpawn = Math.hypot(golem.x - golem.spawnX, golem.y - golem.spawnY);
+  const distToPlayer = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+  const distFromSpawn = Math.hypot(enemy.x - enemy.spawnX, enemy.y - enemy.spawnY);
 
-  if (golem.attackCooldown > 0) golem.attackCooldown -= dt;
+  if (enemy.attackCooldown > 0) enemy.attackCooldown -= dt;
 
-  if (golem.state === "attacking") {
-    if (golem.attackWindup > 0) {
-      golem.attackWindup -= dt;
-      if (golem.attackWindup <= 0 && distToPlayer <= GOLEM_ATTACK_RANGE + 20) {
-        player.takeDamage(GOLEM_ATTACK_DAMAGE);
+  if (enemy.state === "attacking") {
+    if (enemy.attackWindup > 0) {
+      enemy.attackWindup -= dt;
+      if (enemy.attackWindup <= 0 && distToPlayer <= type.attackRange + 20) {
+        player.takeDamage(type.attackDamage);
       }
     }
-    if (golem.attackCooldown <= 0) {
-      golem.state = distToPlayer <= GOLEM_AGGRO_RADIUS ? "chasing" : "idle";
+    if (enemy.attackCooldown <= 0) {
+      enemy.state = distToPlayer <= type.aggroRadius ? "chasing" : "idle";
     }
+    enemy.animPhase += dt;
     return;
   }
 
   // Focus / unfocus.
-  if (golem.state !== "chasing" && distToPlayer <= GOLEM_AGGRO_RADIUS) {
-    golem.state = "chasing";
+  if (enemy.state !== "chasing" && distToPlayer <= type.aggroRadius) {
+    enemy.state = "chasing";
   }
-  if (golem.state === "chasing" && (distToPlayer > GOLEM_LEASH_RADIUS || distFromSpawn > GOLEM_LEASH_RADIUS)) {
-    golem.state = "idle";
+  if (enemy.state === "chasing" && (distToPlayer > type.leashRadius || distFromSpawn > type.leashRadius)) {
+    enemy.state = "idle";
   }
 
-  if (golem.state === "chasing") {
-    if (distToPlayer <= GOLEM_ATTACK_RANGE) {
-      golem.state = "attacking";
-      golem.attackWindup = GOLEM_ATTACK_WINDUP;
-      golem.attackCooldown = GOLEM_ATTACK_COOLDOWN;
-      golem.facingX = (player.x - golem.x) / (distToPlayer || 1);
-      golem.facingY = (player.y - golem.y) / (distToPlayer || 1);
+  if (enemy.state === "chasing") {
+    if (distToPlayer <= type.attackRange) {
+      enemy.state = "attacking";
+      enemy.attackWindup = type.attackWindup;
+      enemy.attackCooldown = type.attackCooldown;
+      enemy.facingX = (player.x - enemy.x) / (distToPlayer || 1);
+      enemy.facingY = (player.y - enemy.y) / (distToPlayer || 1);
     } else {
-      const dx = (player.x - golem.x) / (distToPlayer || 1);
-      const dy = (player.y - golem.y) / (distToPlayer || 1);
-      const newX = golem.x + dx * GOLEM_SPEED * dt;
-      const newY = golem.y + dy * GOLEM_SPEED * dt;
-      if (!isPointInWater(newX, newY) && !isPointBlocked(newX, newY)) {
-        golem.x = newX;
-        golem.y = newY;
+      const dx = (player.x - enemy.x) / (distToPlayer || 1);
+      const dy = (player.y - enemy.y) / (distToPlayer || 1);
+      const newX = enemy.x + dx * type.speed * dt;
+      const newY = enemy.y + dy * type.speed * dt;
+      const blockedByWater = !type.ignoresWater && isPointInWater(newX, newY);
+      if (!blockedByWater && !isPointBlocked(newX, newY)) {
+        enemy.x = newX;
+        enemy.y = newY;
       }
-      golem.facingX = dx;
-      golem.facingY = dy;
+      enemy.facingX = dx;
+      enemy.facingY = dy;
     }
   }
 
-  golem.animPhase += dt;
+  enemy.animPhase += dt;
 }
 
-function updateGolems(dt) {
-  for (const golem of golems) updateGolem(golem, dt);
+function updateEnemies(dt) {
+  for (const enemy of enemies) updateEnemy(enemy, dt);
 }
 
 function rotateAround(p, pivot, angle) {
@@ -1018,50 +1076,24 @@ function rotateAround(p, pivot, angle) {
   return { x: pivot.x + dx * cos - dy * sin, y: pivot.y + dx * sin + dy * cos };
 }
 
-// Per-group rotation angles driven by the golem's current state/animPhase —
-// idle sway, a walk cycle while chasing, and a wind-up/strike while attacking.
-function computeGolemAngles(golem) {
-  const angles = { head: 0, armL: 0, armR: 0, legL: 0, legR: 0, torso: 0 };
-
-  if (golem.state === "attacking") {
-    if (golem.attackWindup > 0) {
-      const t = 1 - golem.attackWindup / GOLEM_ATTACK_WINDUP; // 0 -> 1 through the telegraph
-      angles.armR = -0.9 * t;
-      angles.head = -0.15 * t;
-    } else {
-      const strikeDuration = GOLEM_ATTACK_COOLDOWN - GOLEM_ATTACK_WINDUP;
-      const t = strikeDuration > 0 ? 1 - Math.max(0, golem.attackCooldown / strikeDuration) : 1;
-      angles.armR = 0.6 * (1 - Math.min(1, t));
-    }
-  } else if (golem.state === "chasing") {
-    const walk = Math.sin(golem.animPhase * 6);
-    angles.legL = walk * 0.5;
-    angles.legR = -walk * 0.5;
-    angles.armL = -walk * 0.3;
-    angles.armR = walk * 0.3;
-    angles.torso = walk * 0.03;
-  } else {
-    const sway = Math.sin(golem.animPhase * 1.4);
-    angles.armL = sway * 0.08;
-    angles.armR = -sway * 0.08;
-    angles.head = sway * 0.05;
-  }
-  return angles;
-}
-
-function golemLocalToWorld(local, golem, flip) {
-  const rig = ForestAssets.golemRig;
+// Maps a point in an enemy's local rig space (design-doc pixel coordinates)
+// into world space: scaled from its rig's groundAnchor and mirrored
+// (flip = -1) when facing left. Shared by every family's renderer below —
+// these creatures are side-view illustrations that flip horizontally to
+// face the player, the same way the golem always has.
+function enemyLocalToWorld(local, enemy, type, flip) {
+  const anchor = type.rig.groundAnchor;
   return {
-    x: golem.x + (local.x - rig.groundAnchor.x) * GOLEM_SCALE * flip,
-    y: golem.y + (local.y - rig.groundAnchor.y) * GOLEM_SCALE,
+    x: enemy.x + (local.x - anchor.x) * type.scale * flip,
+    y: enemy.y + (local.y - anchor.y) * type.scale,
   };
 }
 
-function drawGolemPolygon(points, pivot, angle, golem, flip, camera, fill) {
+function drawEnemyPolygon(points, pivot, angle, enemy, type, flip, camera, fill) {
   ctx.beginPath();
   points.forEach((p, i) => {
     const rotated = angle ? rotateAround(p, pivot, angle) : p;
-    const world = golemLocalToWorld(rotated, golem, flip);
+    const world = enemyLocalToWorld(rotated, enemy, type, flip);
     const sx = world.x - camera.x;
     const sy = world.y - camera.y;
     if (i === 0) ctx.moveTo(sx, sy);
@@ -1075,98 +1107,562 @@ function drawGolemPolygon(points, pivot, angle, golem, flip, camera, fill) {
   ctx.stroke();
 }
 
-function drawGolemEllipse(local, rx, ry, pivot, angle, golem, flip, camera, fill) {
+function drawEnemyEllipse(local, rx, ry, pivot, angle, enemy, type, flip, camera, fill) {
   const rotated = angle ? rotateAround(local, pivot, angle) : local;
-  const world = golemLocalToWorld(rotated, golem, flip);
+  const world = enemyLocalToWorld(rotated, enemy, type, flip);
   ctx.beginPath();
-  ctx.ellipse(world.x - camera.x, world.y - camera.y, rx * GOLEM_SCALE, ry * GOLEM_SCALE, 0, 0, Math.PI * 2);
+  ctx.ellipse(world.x - camera.x, world.y - camera.y, rx * type.scale, ry * type.scale, 0, 0, Math.PI * 2);
   ctx.fillStyle = fill;
   ctx.fill();
 }
 
-function drawGolem(golem, camera) {
-  if (golem.state === "dead") return;
-
-  const rig = ForestAssets.golemRig;
-  const flip = golem.facingX < 0 ? -1 : 1;
-  const angles = computeGolemAngles(golem);
-
-  // Shadow
-  const groundWorld = golemLocalToWorld(rig.groundAnchor, golem, flip);
-  const gsx = groundWorld.x - camera.x;
-  const gsy = groundWorld.y - camera.y;
+// Draws an SVG path string's numeric coordinate pairs as a straight
+// polyline (losing exact curve smoothness on any Q/C segments — the same
+// simplification the golem already used for its cracks), transformed into
+// world space around an optional pivot/rotation.
+function drawEnemyPathLine(pathStr, pivot, angle, enemy, type, flip, camera, strokeStyle, lineWidth) {
+  const nums = pathStr.match(/-?[\d.]+/g).map(Number);
   ctx.beginPath();
-  ctx.ellipse(gsx, gsy, 46 * GOLEM_SCALE, 14 * GOLEM_SCALE, 0, 0, Math.PI * 2);
+  for (let i = 0; i < nums.length; i += 2) {
+    const local = { x: nums[i], y: nums[i + 1] };
+    const rotated = angle ? rotateAround(local, pivot, angle) : local;
+    const world = enemyLocalToWorld(rotated, enemy, type, flip);
+    const sx = world.x - camera.x;
+    const sy = world.y - camera.y;
+    if (i === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+  }
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = "round";
+  ctx.stroke();
+}
+
+function drawEnemyShadow(enemy, type, flip, camera) {
+  const groundWorld = enemyLocalToWorld(type.rig.groundAnchor, enemy, type, flip);
+  ctx.beginPath();
+  ctx.ellipse(groundWorld.x - camera.x, groundWorld.y - camera.y, 46 * type.scale, 14 * type.scale, 0, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
   ctx.fill();
+}
+
+// Health bar over the creature while below full — a quick read on how close
+// it is to going down without needing a persistent HUD element per enemy.
+function drawEnemyHealthBar(enemy, type, flip, camera) {
+  if (enemy.health >= type.maxHealth) return;
+  const anchor = type.rig.groundAnchor;
+  const barWorld = enemyLocalToWorld({ x: anchor.x, y: anchor.y - type.rig.viewHeight * 0.85 }, enemy, type, flip);
+  const bx = barWorld.x - camera.x;
+  const by = barWorld.y - camera.y;
+  const w = 50;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+  ctx.fillRect(bx - w / 2, by, w, 6);
+  ctx.fillStyle = "#a63d3d";
+  ctx.fillRect(bx - w / 2, by, w * Math.max(0, enemy.health / type.maxHealth), 6);
+}
+
+// --- Enemy family: golem (biped, arms + legs) — Woodland Grove -----------
+
+// Per-group rotation angles driven by the enemy's current state/animPhase —
+// idle sway, a walk cycle while chasing, and a wind-up/strike while attacking.
+function computeGolemAngles(enemy, type) {
+  const angles = { head: 0, armL: 0, armR: 0, legL: 0, legR: 0, torso: 0 };
+
+  if (enemy.state === "attacking") {
+    if (enemy.attackWindup > 0) {
+      const t = 1 - enemy.attackWindup / type.attackWindup; // 0 -> 1 through the telegraph
+      angles.armR = -0.9 * t;
+      angles.head = -0.15 * t;
+    } else {
+      const strikeDuration = type.attackCooldown - type.attackWindup;
+      const t = strikeDuration > 0 ? 1 - Math.max(0, enemy.attackCooldown / strikeDuration) : 1;
+      angles.armR = 0.6 * (1 - Math.min(1, t));
+    }
+  } else if (enemy.state === "chasing") {
+    const walk = Math.sin(enemy.animPhase * 6);
+    angles.legL = walk * 0.5;
+    angles.legR = -walk * 0.5;
+    angles.armL = -walk * 0.3;
+    angles.armR = walk * 0.3;
+    angles.torso = walk * 0.03;
+  } else {
+    const sway = Math.sin(enemy.animPhase * 1.4);
+    angles.armL = sway * 0.08;
+    angles.armR = -sway * 0.08;
+    angles.head = sway * 0.05;
+  }
+  return angles;
+}
+
+function drawGolemEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const rig = type.rig;
+  const flip = enemy.facingX < 0 ? -1 : 1;
+  const angles = computeGolemAngles(enemy, type);
+
+  drawEnemyShadow(enemy, type, flip, camera);
 
   // Fixed decorations drawn first (they sit beneath/behind the moving segments).
   for (const socket of rig.sockets) {
-    drawGolemEllipse(socket, socket.rx, socket.ry, socket, 0, golem, flip, camera, "#5f5a4f");
+    drawEnemyEllipse(socket, socket.rx, socket.ry, socket, 0, enemy, type, flip, camera, "#5f5a4f");
   }
 
   // Legs and torso behind the arms/head.
   const legL = rig.groups.legL;
   const legR = rig.groups.legR;
-  for (const key of legL.segments) drawGolemPolygon(rig.segments[key].points, legL.pivot, angles.legL, golem, flip, camera, rig.segments[key].fill);
-  for (const key of legR.segments) drawGolemPolygon(rig.segments[key].points, legR.pivot, angles.legR, golem, flip, camera, rig.segments[key].fill);
+  for (const key of legL.segments) drawEnemyPolygon(rig.segments[key].points, legL.pivot, angles.legL, enemy, type, flip, camera, rig.segments[key].fill);
+  for (const key of legR.segments) drawEnemyPolygon(rig.segments[key].points, legR.pivot, angles.legR, enemy, type, flip, camera, rig.segments[key].fill);
 
   const torso = rig.groups.torso;
-  for (const key of torso.segments) drawGolemPolygon(rig.segments[key].points, torso.pivot, angles.torso, golem, flip, camera, rig.segments[key].fill);
+  for (const key of torso.segments) drawEnemyPolygon(rig.segments[key].points, torso.pivot, angles.torso, enemy, type, flip, camera, rig.segments[key].fill);
 
   // Moss patches + glowing cracks over the torso, before the arms/head so
   // the limbs can overlap them naturally.
   for (const moss of rig.moss) {
-    drawGolemEllipse(moss, moss.rx, moss.ry, torso.pivot, angles.torso, golem, flip, camera, "#5c6b3f");
+    drawEnemyEllipse(moss, moss.rx, moss.ry, torso.pivot, angles.torso, enemy, type, flip, camera, "#5c6b3f");
   }
   ctx.save();
-  ctx.strokeStyle = "#c9622f";
-  ctx.lineWidth = 2;
   ctx.globalAlpha = 0.75;
-  for (const crack of rig.cracks) {
-    ctx.beginPath();
-    const pts = crack.match(/[\d.]+/g).map(Number);
-    for (let i = 0; i < pts.length; i += 2) {
-      const world = golemLocalToWorld({ x: pts[i], y: pts[i + 1] }, golem, flip);
-      const sx = world.x - camera.x;
-      const sy = world.y - camera.y;
-      if (i === 0) ctx.moveTo(sx, sy);
-      else ctx.lineTo(sx, sy);
-    }
-    ctx.stroke();
-  }
+  for (const crack of rig.cracks) drawEnemyPathLine(crack, torso.pivot, angles.torso, enemy, type, flip, camera, "#c9622f", 2);
   ctx.restore();
 
   const armL = rig.groups.armL;
   const armR = rig.groups.armR;
-  for (const key of armL.segments) drawGolemPolygon(rig.segments[key].points, armL.pivot, angles.armL, golem, flip, camera, rig.segments[key].fill);
-  for (const key of armR.segments) drawGolemPolygon(rig.segments[key].points, armR.pivot, angles.armR, golem, flip, camera, rig.segments[key].fill);
+  for (const key of armL.segments) drawEnemyPolygon(rig.segments[key].points, armL.pivot, angles.armL, enemy, type, flip, camera, rig.segments[key].fill);
+  for (const key of armR.segments) drawEnemyPolygon(rig.segments[key].points, armR.pivot, angles.armR, enemy, type, flip, camera, rig.segments[key].fill);
 
   const head = rig.groups.head;
-  for (const key of head.segments) drawGolemPolygon(rig.segments[key].points, head.pivot, angles.head, golem, flip, camera, rig.segments[key].fill);
+  for (const key of head.segments) drawEnemyPolygon(rig.segments[key].points, head.pivot, angles.head, enemy, type, flip, camera, rig.segments[key].fill);
 
   // Eyes glow on top of the head.
   ctx.fillStyle = "#e8a24a";
   for (const eye of rig.eyes) {
     const rotated = angles.head ? rotateAround(eye, head.pivot, angles.head) : eye;
-    const world = golemLocalToWorld(rotated, golem, flip);
+    const world = enemyLocalToWorld(rotated, enemy, type, flip);
     ctx.beginPath();
-    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * GOLEM_SCALE, 0, Math.PI * 2);
+    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * type.scale, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Health bar over the head while below full — a quick read on how close
-  // it is to going down without needing a persistent HUD element per enemy.
-  if (golem.health < GOLEM_MAX_HEALTH) {
-    const barWorld = golemLocalToWorld({ x: rig.groundAnchor.x, y: 10 }, golem, flip);
-    const bx = barWorld.x - camera.x;
-    const by = barWorld.y - camera.y;
-    const w = 50;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
-    ctx.fillRect(bx - w / 2, by, w, 6);
-    ctx.fillStyle = "#a63d3d";
-    ctx.fillRect(bx - w / 2, by, w * Math.max(0, golem.health / GOLEM_MAX_HEALTH), 6);
+  drawEnemyHealthBar(enemy, type, flip, camera);
+}
+
+// --- Enemy family: quadruped (torso + head + 4 legs) ----------------------
+// Shared by Crag Ram (Mountain Foothills) and Bramble Boar (Sunmeadow
+// Clearing) — same rig shape, different decorations (horns vs. tusk/bristle,
+// driven by whichever of rig.headDecor/rig.tuskPoints/rig.bristlePath exist).
+
+function computeQuadrupedAngles(enemy, type) {
+  const angles = { head: 0, torso: 0, legFL: 0, legFR: 0, legBL: 0, legBR: 0 };
+
+  if (enemy.state === "attacking") {
+    if (enemy.attackWindup > 0) {
+      const t = 1 - enemy.attackWindup / type.attackWindup;
+      angles.head = -0.5 * t;
+      angles.torso = -0.06 * t;
+    } else {
+      const strikeDuration = type.attackCooldown - type.attackWindup;
+      const t = strikeDuration > 0 ? 1 - Math.max(0, enemy.attackCooldown / strikeDuration) : 1;
+      angles.head = 0.3 * (1 - Math.min(1, t));
+      angles.torso = 0.1 * (1 - Math.min(1, t));
+    }
+  } else if (enemy.state === "chasing") {
+    const walk = Math.sin(enemy.animPhase * 9); // diagonal-pair gait, faster than the golem's lumber
+    angles.legFL = walk * 0.45;
+    angles.legBR = walk * 0.45;
+    angles.legFR = -walk * 0.45;
+    angles.legBL = -walk * 0.45;
+    angles.torso = walk * 0.025;
+    angles.head = -walk * 0.04;
+  } else {
+    const sway = Math.sin(enemy.animPhase * 1.2);
+    angles.head = sway * 0.06;
   }
+  return angles;
+}
+
+function drawQuadrupedEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const rig = type.rig;
+  const flip = enemy.facingX < 0 ? -1 : 1;
+  const angles = computeQuadrupedAngles(enemy, type);
+
+  drawEnemyShadow(enemy, type, flip, camera);
+
+  for (const key of ["legFL", "legFR", "legBL", "legBR"]) {
+    const group = rig.groups[key];
+    for (const segKey of group.segments) drawEnemyPolygon(rig.segments[segKey].points, group.pivot, angles[key], enemy, type, flip, camera, rig.segments[segKey].fill);
+  }
+
+  const torso = rig.groups.torso;
+  for (const key of torso.segments) drawEnemyPolygon(rig.segments[key].points, torso.pivot, angles.torso, enemy, type, flip, camera, rig.segments[key].fill);
+
+  if (rig.bristlePath) drawEnemyPathLine(rig.bristlePath, torso.pivot, angles.torso, enemy, type, flip, camera, "#4f6636", 4);
+
+  const head = rig.groups.head;
+  for (const key of head.segments) drawEnemyPolygon(rig.segments[key].points, head.pivot, angles.head, enemy, type, flip, camera, rig.segments[key].fill);
+
+  if (rig.headDecor) {
+    for (const path of rig.headDecor) drawEnemyPathLine(path, head.pivot, angles.head, enemy, type, flip, camera, "#e8dcc0", 2.5);
+  }
+  if (rig.tuskPoints) drawEnemyPolygon(rig.tuskPoints, head.pivot, angles.head, enemy, type, flip, camera, "#f0e6d2");
+
+  ctx.fillStyle = "#2a1f18";
+  for (const eye of rig.eyes) {
+    const rotated = angles.head ? rotateAround(eye, head.pivot, angles.head) : eye;
+    const world = enemyLocalToWorld(rotated, enemy, type, flip);
+    ctx.beginPath();
+    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * type.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  drawEnemyHealthBar(enemy, type, flip, camera);
+}
+
+// --- Enemy family: segmented chain (3 independent body segments) ----------
+// Mire Leech (Marsh Bog) — no rotate-group joints; each segment instead bobs
+// vertically on its own phase-lagged sine, tail through head, for an
+// inchworm-style crawl regardless of which direction it's actually moving.
+
+function drawSegmentedChainEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const rig = type.rig;
+  const flip = enemy.facingX < 0 ? -1 : 1;
+
+  drawEnemyShadow(enemy, type, flip, camera);
+
+  const lagBySegment = { tail: 0, mid: 0.4, head: 0.8 };
+  const speedMul = enemy.state === "chasing" ? 10 : 3;
+  const humpOf = (key) => Math.sin(enemy.animPhase * speedMul - lagBySegment[key] * Math.PI) * 6;
+
+  for (const key of rig.chainOrder) {
+    const seg = rig.segments[key];
+    const hump = humpOf(key);
+    const offsetPoints = seg.points.map((p) => ({ x: p.x, y: p.y - hump }));
+    drawEnemyPolygon(offsetPoints, null, 0, enemy, type, flip, camera, seg.fill);
+  }
+
+  const headHump = humpOf("head");
+  const withHeadOffset = (p) => ({ x: p.x, y: p.y - headHump });
+
+  ctx.fillStyle = "#2a1f18";
+  const mouthWorld = enemyLocalToWorld(withHeadOffset(rig.mouth), enemy, type, flip);
+  ctx.beginPath();
+  ctx.arc(mouthWorld.x - camera.x, mouthWorld.y - camera.y, rig.mouth.r * type.scale, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (const fang of rig.fangs) {
+    const nums = fang.match(/-?[\d.]+/g).map(Number);
+    ctx.beginPath();
+    for (let i = 0; i < nums.length; i += 2) {
+      const world = enemyLocalToWorld(withHeadOffset({ x: nums[i], y: nums[i + 1] }), enemy, type, flip);
+      const sx = world.x - camera.x, sy = world.y - camera.y;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.strokeStyle = "#2a1f18";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "#c9622f";
+  for (const eye of rig.eyes) {
+    const world = enemyLocalToWorld(withHeadOffset(eye), enemy, type, flip);
+    ctx.beginPath();
+    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * type.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tailHump = humpOf("tail");
+  ctx.save();
+  ctx.fillStyle = "#3a4a2a";
+  ctx.globalAlpha = 0.7;
+  for (const drip of rig.drips) {
+    const world = enemyLocalToWorld({ x: drip.x, y: drip.y - tailHump }, enemy, type, flip);
+    ctx.beginPath();
+    ctx.ellipse(world.x - camera.x, world.y - camera.y, drip.rx * type.scale, drip.ry * type.scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  drawEnemyHealthBar(enemy, type, flip, camera);
+}
+
+// --- Enemy family: floaty (no legs, drifts) --------------------------------
+// Frost Wisp (Frostfall Tundra) — body/head bob on independent sine phases,
+// the tail sweeps side to side, and the back shards pulse in opacity.
+
+function drawFloatyEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const rig = type.rig;
+  const flip = enemy.facingX < 0 ? -1 : 1;
+
+  drawEnemyShadow(enemy, type, flip, camera);
+
+  const glowWorld = enemyLocalToWorld({ x: 100, y: 100 }, enemy, type, flip);
+  const gsx = glowWorld.x - camera.x, gsy = glowWorld.y - camera.y;
+  const glowRadius = 70 * type.scale;
+  const glow = ctx.createRadialGradient(gsx, gsy, 0, gsx, gsy, glowRadius);
+  glow.addColorStop(0, "rgba(191, 227, 227, 0.35)");
+  glow.addColorStop(1, "rgba(191, 227, 227, 0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(gsx, gsy, glowRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  const bodyBobY = Math.sin(enemy.animPhase * 2.2) * 6;
+  const headBobY = Math.sin(enemy.animPhase * 2.6 + 1) * 4;
+
+  const bodyPts = rig.segments.body.points.map((p) => ({ x: p.x, y: p.y + bodyBobY }));
+  drawEnemyPolygon(bodyPts, null, 0, enemy, type, flip, camera, rig.segments.body.fill);
+
+  const tailSwing = Math.sin(enemy.animPhase * 3) * 0.35;
+  drawEnemyPathLine(rig.tailPath, { x: rig.tailPivot.x, y: rig.tailPivot.y + bodyBobY }, tailSwing, enemy, type, flip, camera, "#bcdfe8", 2);
+
+  ctx.save();
+  ctx.globalAlpha = 0.55 + Math.sin(enemy.animPhase * 4) * 0.25;
+  for (const shard of rig.shards) {
+    const pts = shard.points.map((p) => ({ x: p.x, y: p.y + bodyBobY }));
+    drawEnemyPolygon(pts, null, 0, enemy, type, flip, camera, "#bcdfe8");
+  }
+  ctx.restore();
+
+  const headPts = rig.segments.head.points.map((p) => ({ x: p.x, y: p.y + headBobY }));
+  drawEnemyPolygon(headPts, null, 0, enemy, type, flip, camera, rig.segments.head.fill);
+
+  ctx.fillStyle = "#8fe0ff";
+  for (const eye of rig.eyes) {
+    const world = enemyLocalToWorld({ x: eye.x, y: eye.y + headBobY }, enemy, type, flip);
+    ctx.beginPath();
+    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * type.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  drawEnemyHealthBar(enemy, type, flip, camera);
+}
+
+// --- Enemy family: radial legs (8 legs sharing one body pivot) -----------
+// Crystal Crawler (Hollow Deep) — since it can approach from any direction
+// (no clear "forward"), the gait is a phase-offset ripple across all 8 legs
+// rather than a facing-based walk cycle: each leg pulses its own length on a
+// sine wave staggered by its index, giving an alternating-tripod feel.
+
+function legPointsFor(pivot, angle, len, width) {
+  const dx = Math.cos(angle), dy = Math.sin(angle);
+  const px = -dy, py = dx;
+  const cx = pivot.x, cy = pivot.y;
+  return [
+    { x: cx + px * width, y: cy + py * width },
+    { x: cx + dx * len + px * width * 0.4, y: cy + dy * len + py * width * 0.4 },
+    { x: cx + dx * len - px * width * 0.4, y: cy + dy * len - py * width * 0.4 },
+    { x: cx - px * width, y: cy - py * width },
+  ];
+}
+
+function drawRadialLegsEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const rig = type.rig;
+  const flip = enemy.facingX < 0 ? -1 : 1;
+
+  drawEnemyShadow(enemy, type, flip, camera);
+
+  const speedMul = enemy.state === "chasing" ? 8 : 2.5;
+  rig.legAngles.forEach((angle, i) => {
+    const phase = enemy.animPhase * speedMul + i * (Math.PI / 4);
+    const lengthScale = 0.82 + 0.28 * (0.5 + 0.5 * Math.sin(phase));
+    const points = legPointsFor(rig.legPivot, angle, rig.legLength * lengthScale, rig.legWidth);
+    drawEnemyPolygon(points, null, 0, enemy, type, flip, camera, "#7a5cc4");
+  });
+
+  drawEnemyPolygon(rig.bodyPoints, null, 0, enemy, type, flip, camera, "#4a3a6a");
+
+  ctx.fillStyle = "#8fe0ff";
+  for (const eye of rig.eyes) {
+    const world = enemyLocalToWorld(eye, enemy, type, flip);
+    ctx.beginPath();
+    ctx.arc(world.x - camera.x, world.y - camera.y, eye.r * type.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#e8d8ff";
+  const mouthWorld = enemyLocalToWorld(rig.mouth, enemy, type, flip);
+  ctx.beginPath();
+  ctx.arc(mouthWorld.x - camera.x, mouthWorld.y - camera.y, rig.mouth.r * type.scale, 0, Math.PI * 2);
+  ctx.fill();
+
+  drawEnemyHealthBar(enemy, type, flip, camera);
+}
+
+// --- Dispatch --------------------------------------------------------------
+
+function drawEnemy(enemy, camera) {
+  const type = ENEMY_TYPES[enemy.kind];
+  switch (type.family) {
+    case "golem": drawGolemEnemy(enemy, type, camera); break;
+    case "quadruped": drawQuadrupedEnemy(enemy, type, camera); break;
+    case "segmentedChain": drawSegmentedChainEnemy(enemy, type, camera); break;
+    case "floaty": drawFloatyEnemy(enemy, type, camera); break;
+    case "radialLegs": drawRadialLegsEnemy(enemy, type, camera); break;
+  }
+}
+
+// --- Biomes ----------------------------------------------------------------
+
+// Woodland Grove (the existing forest — trees/foliage/mushrooms/rocks/
+// ambient generated below in generateWorld()) occupies the inner disk; the
+// five outlying biomes from the design doc each get one angular wedge of
+// the annulus beyond it, out to the world's boundary wall. The wedge order
+// is rotated by a random-but-seeded base angle each world generation so the
+// layout varies between sessions while staying identical for every player
+// in the same multiplayer game.
+const BIOME_INNER_RADIUS = 1300;
+
+const OUTER_BIOMES = [
+  {
+    id: "marshBog", enemyKind: "mireLeech", groundColor: "#48513c",
+    treeKey: "cypress", treeChance: 0.5,
+    pickFoliage: () => (RNG.random() < 0.82 ? "reedCluster" : "mudPool"),
+  },
+  {
+    id: "mountainFoothills", enemyKind: "cragRam", groundColor: "#767469",
+    treeKey: "windBentPine", treeChance: 0.4,
+    pickFoliage: () => (RNG.random() < 0.7 ? "alpineTuft" : "scree"),
+  },
+  {
+    id: "frostfallTundra", enemyKind: "frostWisp", groundColor: "#cfe0e4",
+    treeKey: "snowPine", treeChance: 0.55,
+    pickFoliage: () => (RNG.random() < 0.6 ? "frozenShrub" : "snowdrift"),
+  },
+  {
+    id: "sunmeadowClearing", enemyKind: "bramblingBoar", groundColor: "#a39a4a",
+    treeKey: null,
+    pickFoliage: () => {
+      const r = RNG.random();
+      if (r < 0.35) return "wildflowerPatch";
+      if (r < 0.8) return "wheatGrass";
+      return "sunflowerCluster";
+    },
+  },
+  {
+    id: "hollowDeep", enemyKind: "crystalCrawler", groundColor: "#241c30",
+    treeKey: null,
+    pickFoliage: () => {
+      const r = RNG.random();
+      if (r < 0.45) return "glowingFungus";
+      if (r < 0.75) return "crystalCluster";
+      return "stalagmite";
+    },
+  },
+];
+const BIOME_SECTOR_SIZE = (Math.PI * 2) / OUTER_BIOMES.length;
+
+let biomeBaseAngle = 0;
+let biomeTrees = [];
+let biomeFoliage = [];
+
+function biomeSectorAngles(index) {
+  const angleStart = biomeBaseAngle + index * BIOME_SECTOR_SIZE;
+  return { angleStart, angleEnd: angleStart + BIOME_SECTOR_SIZE };
+}
+
+function biomeTreeFootprintRadius(item) {
+  return ((ForestAssets.biomeTrees[item.type].width * item.scale) / 2) * 0.75;
+}
+
+function biomeFoliageFootprintRadius(item) {
+  return ((ForestAssets.biomeFoliage[item.type].width * item.scale) / 2) * 0.6;
+}
+
+function generateBiomes() {
+  biomeBaseAngle = RNG.random() * Math.PI * 2;
+  biomeTrees = [];
+  biomeFoliage = [];
+
+  for (let i = 0; i < OUTER_BIOMES.length; i++) {
+    const biome = OUTER_BIOMES[i];
+    const { angleStart, angleEnd } = biomeSectorAngles(i);
+
+    if (biome.treeKey) {
+      biomeTrees.push(...scatterWithDensity({
+        count: 260,
+        maxAttempts: 260 * 12,
+        sample: () => sampleSectorAnnulus(BIOME_INNER_RADIUS, WALL_START, angleStart, angleEnd),
+        footprintRadius: biomeTreeFootprintRadius,
+        overlapAllowance: 0.75,
+        build: (x, y) => ({ x, y, type: biome.treeKey, scale: 0.75 + RNG.random() * 0.5 }),
+      }));
+      // Denser boundary band out at the world's true edge, same idea as the
+      // Woodland Grove's own wall — this biome's silhouette right up close.
+      biomeTrees.push(...scatterWithDensity({
+        count: 480,
+        maxAttempts: 480 * 15,
+        sample: () => sampleSectorAnnulus(WALL_START, WALL_END, angleStart, angleEnd),
+        footprintRadius: biomeTreeFootprintRadius,
+        overlapAllowance: 0.42,
+        build: (x, y) => ({ x, y, type: biome.treeKey, scale: 0.8 + RNG.random() * 0.5 }),
+      }));
+    }
+
+    biomeFoliage.push(...scatterWithDensity({
+      count: 260,
+      maxAttempts: 260 * 12,
+      sample: () => sampleSectorAnnulus(BIOME_INNER_RADIUS, WALL_END, angleStart, angleEnd),
+      footprintRadius: biomeFoliageFootprintRadius,
+      overlapAllowance: 0.55,
+      build: (x, y) => ({ x, y, type: biome.pickFoliage(), scale: 0.8 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
+    }));
+  }
+}
+
+function spawnEnemies() {
+  enemies = [];
+
+  // Woodland Grove's golems stay within the inner disk, same spawn band as
+  // before (just capped short of the biome boundary instead of the old
+  // full-world wall).
+  spawnEnemyGroup("golem", 3, () => sampleAnnulus(CLEARING_RADIUS + 300, BIOME_INNER_RADIUS - 150));
+
+  for (let i = 0; i < OUTER_BIOMES.length; i++) {
+    const biome = OUTER_BIOMES[i];
+    const { angleStart, angleEnd } = biomeSectorAngles(i);
+    spawnEnemyGroup(biome.enemyKind, 3, () => sampleSectorAnnulus(BIOME_INNER_RADIUS + 150, WALL_START, angleStart, angleEnd));
+  }
+}
+
+// Tints each outlying biome's ground as a donut-sector wedge from
+// BIOME_INNER_RADIUS out past the visible world, so the Woodland Grove's
+// disk stays plain forest green regardless of camera position while each
+// biome reads distinctly even at the far side of its own sector.
+const BIOME_WEDGE_OUTER_RADIUS = 8000;
+
+function drawBiomeGround(camera) {
+  const cx = WORLD_CENTER.x - camera.x;
+  const cy = WORLD_CENTER.y - camera.y;
+  for (let i = 0; i < OUTER_BIOMES.length; i++) {
+    const biome = OUTER_BIOMES[i];
+    const { angleStart, angleEnd } = biomeSectorAngles(i);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(angleStart) * BIOME_WEDGE_OUTER_RADIUS, cy + Math.sin(angleStart) * BIOME_WEDGE_OUTER_RADIUS);
+    ctx.arc(cx, cy, BIOME_WEDGE_OUTER_RADIUS, angleStart, angleEnd, false);
+    ctx.lineTo(cx + Math.cos(angleEnd) * BIOME_INNER_RADIUS, cy + Math.sin(angleEnd) * BIOME_INNER_RADIUS);
+    ctx.arc(cx, cy, BIOME_INNER_RADIUS, angleEnd, angleStart, true);
+    ctx.closePath();
+    ctx.fillStyle = biome.groundColor;
+    ctx.fill();
+  }
+}
+
+function drawBiomeTree(item, camera) {
+  drawGroundSprite(ForestAssets.biomeTrees[item.type], item, camera);
+}
+
+function drawBiomeFoliage(item, camera) {
+  drawGroundSprite(ForestAssets.biomeFoliage[item.type], item, camera);
 }
 
 // --- Projectiles ---------------------------------------------------------------
@@ -1198,12 +1694,12 @@ function updateProjectiles(dt) {
     p.traveled += Math.hypot(stepX, stepY);
 
     let hit = false;
-    for (const golem of golems) {
-      if (golem.state === "dead") continue;
-      if (Math.hypot(p.x - golem.x, p.y - golem.y) < FIRE_BOLT_HIT_RADIUS) {
-        golem.health -= FIRE_BOLT_DAMAGE;
+    for (const enemy of enemies) {
+      if (enemy.state === "dead") continue;
+      if (Math.hypot(p.x - enemy.x, p.y - enemy.y) < FIRE_BOLT_HIT_RADIUS) {
+        enemy.health -= FIRE_BOLT_DAMAGE;
         spawnEffect(p.x, p.y, "fireImpact", 0.4);
-        if (golem.health <= 0) killGolem(golem);
+        if (enemy.health <= 0) killEnemy(enemy);
         hit = true;
         break;
       }
@@ -1331,22 +1827,22 @@ const WIND_KNOCKBACK_FORCE = 260;
 
 function castWindExplosion() {
   spawnEffect(player.x, player.y, "windExplosion", 0.7);
-  for (const golem of golems) {
-    if (golem.state === "dead") continue;
-    const dist = Math.hypot(golem.x - player.x, golem.y - player.y);
+  for (const enemy of enemies) {
+    if (enemy.state === "dead") continue;
+    const dist = Math.hypot(enemy.x - player.x, enemy.y - player.y);
     if (dist >= WIND_EXPLOSION_RADIUS) continue;
-    const dx = (golem.x - player.x) / (dist || 1);
-    const dy = (golem.y - player.y) / (dist || 1);
+    const dx = (enemy.x - player.x) / (dist || 1);
+    const dy = (enemy.y - player.y) / (dist || 1);
     const force = WIND_KNOCKBACK_FORCE * (1 - dist / WIND_EXPLOSION_RADIUS);
-    const newX = golem.x + dx * force;
-    const newY = golem.y + dy * force;
+    const newX = enemy.x + dx * force;
+    const newY = enemy.y + dy * force;
     if (!isPointInWater(newX, newY)) {
-      golem.x = newX;
-      golem.y = newY;
+      enemy.x = newX;
+      enemy.y = newY;
     }
-    golem.state = "idle";
-    golem.attackCooldown = 0;
-    golem.attackWindup = 0;
+    enemy.state = "idle";
+    enemy.attackCooldown = 0;
+    enemy.attackWindup = 0;
   }
 }
 
@@ -1394,13 +1890,6 @@ function pickFoliageType() {
 
 function pickClearingFoliageType() {
   return RNG.random() < 0.6 ? "tallGrass" : "flowers";
-}
-
-function pickWallFoliageType() {
-  const r = RNG.random();
-  if (r < 0.35) return "bush";
-  if (r < 0.75) return "tallGrass";
-  return "fern";
 }
 
 function foliageFootprintRadius(item) {
@@ -1460,27 +1949,19 @@ function generateWorld() {
   window.campfire = campfire;
 
   // --- Trees ---
+  // Woodland Grove fills the inner disk only (radius up to
+  // BIOME_INNER_RADIUS) — beyond that, each of the five outlying biomes
+  // (see "--- Biomes ---" above) owns its own wedge, including its own
+  // denser tree band out at the world's true edge. See generateBiomes().
   trees = scatterWithDensity({
     count: 550,
     maxAttempts: 550 * 12,
-    sample: () => sampleAnnulus(CLEARING_RADIUS, WALL_START),
+    sample: () => sampleAnnulus(CLEARING_RADIUS, BIOME_INNER_RADIUS),
     densityAt: treeRingDensity,
     footprintRadius: treeFootprintRadius,
     overlapAllowance: 0.8,
     build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.75 + RNG.random() * 0.55 }),
   });
-
-  // Boundary wall: deliberately denser and packed tighter (looser overlap
-  // allowance) than the interior, so the world edge reads as thick forest
-  // that keeps going rather than a place where the trees just stop.
-  trees.push(...scatterWithDensity({
-    count: 1300,
-    maxAttempts: 1300 * 15,
-    sample: () => sampleAnnulus(WALL_START, WALL_END),
-    footprintRadius: treeFootprintRadius,
-    overlapAllowance: 0.42,
-    build: (x, y) => ({ x, y, type: pickTreeType(), scale: 0.8 + RNG.random() * 0.55 }),
-  }));
 
   // --- Foliage ---
   foliage = [];
@@ -1499,7 +1980,7 @@ function generateWorld() {
   foliage.push(...scatterWithDensity({
     count: 420,
     maxAttempts: 420 * 10,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 40, WALL_START),
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 40, BIOME_INNER_RADIUS),
     densityAt: (x, y) => {
       const density = terrainNoise(x / 260, y / 260);
       if (density < 0.42) return 0;
@@ -1512,7 +1993,7 @@ function generateWorld() {
 
   // A handful of tight flower clusters layered on top.
   for (let c = 0; c < 8; c++) {
-    const center = sampleAnnulus(CLEARING_RADIUS + 40, WALL_START);
+    const center = sampleAnnulus(CLEARING_RADIUS + 40, BIOME_INNER_RADIUS);
     const n = 3 + Math.floor(RNG.random() * 4);
     for (let i = 0; i < n; i++) {
       const angle = RNG.random() * Math.PI * 2;
@@ -1528,21 +2009,10 @@ function generateWorld() {
     }
   }
 
-  // Boundary wall: dense low cover so gaps between wall-tree trunks don't
-  // leave sightlines through to whatever (nothing) is beyond.
-  foliage.push(...scatterWithDensity({
-    count: 1000,
-    maxAttempts: 1000 * 12,
-    sample: () => sampleAnnulus(WALL_START, WALL_END),
-    footprintRadius: foliageFootprintRadius,
-    overlapAllowance: 0.4,
-    build: (x, y) => ({ x, y, type: pickWallFoliageType(), scale: 0.9 + RNG.random() * 0.4, flip: RNG.random() < 0.5 }),
-  }));
-
   // --- Mushrooms ---
   mushrooms = [];
   for (let c = 0; c < 16; c++) {
-    const center = sampleAnnulus(CLEARING_RADIUS + 60, WALL_START);
+    const center = sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS);
     const n = 2 + Math.floor(RNG.random() * 3);
     for (let i = 0; i < n; i++) {
       const angle = RNG.random() * Math.PI * 2;
@@ -1560,7 +2030,7 @@ function generateWorld() {
   mushrooms.push(...scatterWithDensity({
     count: 24,
     maxAttempts: 24 * 15,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS),
     footprintRadius: mushroomFootprintRadius,
     overlapAllowance: 0.55,
     build: (x, y) => ({ x, y, type: pickMushroomType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
@@ -1569,7 +2039,7 @@ function generateWorld() {
   // --- Rocks ---
   rocks = [];
   for (let c = 0; c < 18; c++) {
-    const center = sampleAnnulus(CLEARING_RADIUS + 60, WALL_START);
+    const center = sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS);
     const n = 2 + Math.floor(RNG.random() * 4);
     for (let i = 0; i < n; i++) {
       const angle = RNG.random() * Math.PI * 2;
@@ -1587,7 +2057,7 @@ function generateWorld() {
   rocks.push(...scatterWithDensity({
     count: 26,
     maxAttempts: 26 * 15,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS),
     footprintRadius: rockFootprintRadius,
     overlapAllowance: 0.55,
     build: (x, y) => ({ x, y, variant: pickRockVariant(), scale: 0.75 + RNG.random() * 0.35, flip: RNG.random() < 0.5 }),
@@ -1597,15 +2067,18 @@ function generateWorld() {
   ambientDetails = scatterWithDensity({
     count: 60,
     maxAttempts: 60 * 15,
-    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, WALL_START),
+    sample: () => sampleAnnulus(CLEARING_RADIUS + 60, BIOME_INNER_RADIUS),
     footprintRadius: ambientFootprintRadius,
     overlapAllowance: 0.55,
     build: (x, y) => ({ x, y, type: pickAmbientType(), scale: 0.85 + RNG.random() * 0.3, flip: RNG.random() < 0.5 }),
   });
 
-  // --- Healing pools, golems ---
+  // --- Biomes (five outlying wedges beyond the Grove) ---
+  generateBiomes();
+
+  // --- Healing pools, enemies ---
   generateHealingPools();
-  spawnGolems();
+  spawnEnemies();
 
   // Transient spell state shouldn't carry over from a previous world (e.g.
   // hosting/joining mid-session regenerates everything from a new seed).
@@ -1817,7 +2290,7 @@ function loop(now) {
   // Combat/hazard simulation is local-only (not part of the multiplayer
   // sync) and pauses along with the player while the campfire menu is open.
   if (!menuOpen) {
-    updateGolems(dt);
+    updateEnemies(dt);
     updateProjectiles(dt);
     updateEffects(dt);
     updateHealingPools(now);
@@ -1856,6 +2329,7 @@ function loop(now) {
   ctx.translate(-canvas.width / 2, -canvas.height / 2);
 
   drawGround();
+  drawBiomeGround(camera);
   drawWater(camera);
   drawHealingPools(camera);
   drawIceBridges(camera);
@@ -1869,7 +2343,9 @@ function loop(now) {
   for (const item of mushrooms) drawables.push({ y: item.y, kind: "mushroom", item });
   for (const item of rocks) drawables.push({ y: item.y, kind: "rock", item });
   for (const item of ambientDetails) drawables.push({ y: item.y, kind: "ambient", item });
-  for (const golem of golems) drawables.push({ y: golem.y, kind: "golem", item: golem });
+  for (const item of biomeTrees) drawables.push({ y: item.y, kind: "biomeTree", item });
+  for (const item of biomeFoliage) drawables.push({ y: item.y, kind: "biomeFoliage", item });
+  for (const enemy of enemies) drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
   for (const p of projectiles) drawables.push({ y: p.y, kind: "projectile", item: p });
   if (mp) {
     for (const remote of mp.getRemotePlayers()) {
@@ -1888,7 +2364,9 @@ function loop(now) {
       case "rock": drawRock(d.item, camera); break;
       case "ambient": drawAmbient(d.item, camera); break;
       case "campfire": drawCampfire(d.item, camera); break;
-      case "golem": drawGolem(d.item, camera); break;
+      case "biomeTree": drawBiomeTree(d.item, camera); break;
+      case "biomeFoliage": drawBiomeFoliage(d.item, camera); break;
+      case "enemy": drawEnemy(d.item, camera); break;
       case "projectile": drawProjectile(d.item, camera); break;
       case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
       case "player": player.draw(ctx, camera); break;
