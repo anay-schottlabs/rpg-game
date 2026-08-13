@@ -946,23 +946,86 @@ const ForestAssets = (() => {
     viewHeight: 200,
   };
 
-  // Sparring Partner (Village Arena) — same segmented-chain body plan as
-  // the Mire Leech (three independently-bobbing blobs), reskinned as a
-  // stacked straw-and-burlap training dummy: a weighted base that doesn't
-  // tip over, a bundled torso, a wrapped head. No mouth/fangs/drips — those
-  // are optional in drawSegmentedChainEnemy() specifically so this rig can
-  // omit them.
-  const sparringDummyRig = {
-    segments: {
-      tail: { points: blobPointList(100, 158, 30, 22, 141), fill: "#8a6a48" },
-      mid: { points: blobPointList(100, 112, 26, 30, 142), fill: "#d4a53d" },
-      head: { points: blobPointList(100, 68, 20, 18, 143), fill: "#c9a877" },
-    },
-    chainOrder: ["tail", "mid", "head"],
-    eyes: [{ x: 93, y: 64, r: 2.5 }, { x: 107, y: 64, r: 2.5 }],
-    groundAnchor: { x: 100, y: 180 },
-    viewHeight: 200,
-  };
+  // Trainees (Village Arena, "Training Battles" — Blue Sash / Red Sash) —
+  // same segmented golem-family shape as the player/Chief rigs (head/torso/
+  // armL/armR/legL/legR groups, so drawGolemEnemy()/computeGolemAngles()
+  // work unchanged), built from the doc's own Q-curve paths via
+  // sampleQuadratic()/limbCapsule(). The two share identical geometry,
+  // just recolored per the doc's two sash variants.
+  function traineeRig(colors) {
+    return {
+      segments: {
+        head: { kind: "ellipse", center: { x: 80, y: 68 }, rx: 20, ry: 20, fill: "#e8c9a0" },
+        hair: {
+          kind: "polygon",
+          points: [
+            ...sampleQuadratic({ x: 60, y: 60 }, { x: 80, y: 46 }, { x: 100, y: 60 }, 5),
+            ...sampleQuadratic({ x: 100, y: 60 }, { x: 98, y: 50 }, { x: 80, y: 48 }, 5).slice(1),
+            ...sampleQuadratic({ x: 80, y: 48 }, { x: 62, y: 50 }, { x: 60, y: 60 }, 5).slice(1),
+          ],
+          fill: colors.hair,
+        },
+        torso: {
+          kind: "polygon",
+          points: [
+            ...sampleQuadratic({ x: 55, y: 95 }, { x: 80, y: 86 }, { x: 105, y: 95 }, 6),
+            { x: 100, y: 152 },
+            ...sampleQuadratic({ x: 100, y: 152 }, { x: 80, y: 160 }, { x: 60, y: 152 }, 6),
+          ],
+          fill: colors.robe,
+        },
+        belt: { kind: "polygon", points: [{ x: 64, y: 140 }, { x: 96, y: 140 }, { x: 96, y: 148 }, { x: 64, y: 148 }], fill: "#2a1f18" },
+        badge: {
+          kind: "polygon",
+          points: [
+            { x: 132, y: 72 }, { x: 135, y: 80 }, { x: 143, y: 80 }, { x: 136, y: 85 }, { x: 139, y: 93 },
+            { x: 132, y: 88 }, { x: 125, y: 93 }, { x: 128, y: 85 }, { x: 121, y: 80 }, { x: 129, y: 80 },
+          ],
+          fill: "#e8e08a",
+        },
+
+        armLUpper: { kind: "polygon", points: limbCapsule(58, 100, 46, 113.5, 7), fill: colors.sleeve },
+        armLLower: { kind: "polygon", points: limbCapsule(46, 113.5, 46, 130, 7), fill: colors.sleeve },
+        handL: { kind: "ellipse", center: { x: 46, y: 130 }, rx: 9, ry: 9, fill: "#e8c9a0" },
+        armRUpper: { kind: "polygon", points: limbCapsule(102, 100, 116, 101, 7), fill: colors.sleeve },
+        armRLower: { kind: "polygon", points: limbCapsule(116, 101, 122, 88, 7), fill: colors.sleeve },
+        handR: { kind: "ellipse", center: { x: 122, y: 88 }, rx: 9, ry: 9, fill: "#e8c9a0" },
+
+        legL: {
+          kind: "polygon",
+          points: [
+            ...sampleQuadratic({ x: 56, y: 148 }, { x: 68, y: 148 }, { x: 72, y: 150 }, 4),
+            { x: 66, y: 205 },
+            ...sampleQuadratic({ x: 66, y: 205 }, { x: 56, y: 208 }, { x: 48, y: 203 }, 4),
+          ],
+          fill: colors.pants,
+        },
+        legR: {
+          kind: "polygon",
+          points: [
+            ...sampleQuadratic({ x: 88, y: 150 }, { x: 92, y: 148 }, { x: 104, y: 148 }, 4),
+            { x: 112, y: 203 },
+            ...sampleQuadratic({ x: 112, y: 203 }, { x: 104, y: 208 }, { x: 94, y: 205 }, 4),
+          ],
+          fill: colors.pants,
+        },
+      },
+      groups: {
+        head: { segments: ["head", "hair"], pivot: { x: 80, y: 86 } },
+        torso: { segments: ["torso", "belt", "badge"], pivot: { x: 80, y: 95 } },
+        armL: { segments: ["armLUpper", "armLLower", "handL"], pivot: { x: 58, y: 100 } },
+        armR: { segments: ["armRUpper", "armRLower", "handR"], pivot: { x: 102, y: 100 } },
+        legL: { segments: ["legL"], pivot: { x: 64, y: 148 } },
+        legR: { segments: ["legR"], pivot: { x: 96, y: 148 } },
+      },
+      eyes: [{ x: 74, y: 66, r: 2.5 }, { x: 86, y: 66, r: 2.5 }],
+      groundAnchor: { x: 80, y: 208 },
+      viewHeight: 220,
+    };
+  }
+
+  const traineeBlueRig = traineeRig({ robe: "#4a6a8a", sleeve: "#4a6a8a", pants: "#2a3a4a", hair: "#5a4530" });
+  const traineeRedRig = traineeRig({ robe: "#a63d3d", sleeve: "#a63d3d", pants: "#3a2418", hair: "#3a2c1e" });
 
   // Crag Ram (Mountain Foothills) — quadruped, same rotate-group rig shape
   // as the golem's limbs, sized for a walk cycle + headbutt telegraph.
@@ -1193,7 +1256,7 @@ const ForestAssets = (() => {
     viewHeight: 400,
   };
 
-  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig, crystalGolem: crystalGolemRig, sparringDummy: sparringDummyRig, chief: chiefRig };
+  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig, crystalGolem: crystalGolemRig, traineeBlue: traineeBlueRig, traineeRed: traineeRedRig, chief: chiefRig };
 
   // --- Spawn Hub: NPCs -----------------------------------------------------
 
