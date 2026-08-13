@@ -1384,6 +1384,27 @@ function drawPlayerCharacter(ctx, camera, state) {
   ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
   ctx.fill();
 
+  // Casting glow — drawn here, before any of the player's own segments
+  // below, so it sits behind the player rather than over them (the
+  // matching #casting-ring/#cast-pip-* CSS overlay in index.html sits
+  // above the canvas outright and can only ever be in front, which is
+  // fine for the dashed ring/direction pips but wasn't for this).
+  // Centered on the torso pivot — the player's visual body center — not
+  // groundAnchor, which is the feet-level point the whole rig is anchored
+  // to and camera is centered on.
+  if (state.isCasting) {
+    const glowWorld = playerLocalToWorld(rig.groups.torso.pivot, state, flip);
+    const gx = glowWorld.x - camera.x, gy = glowWorld.y - camera.y;
+    const glowR = 62;
+    const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, glowR);
+    grad.addColorStop(0, "rgba(244, 201, 74, 0.55)");
+    grad.addColorStop(1, "rgba(244, 201, 74, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(gx, gy, glowR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // Gust Step dash streak (design-doc asset) — trails behind the player
   // along the direction of travel, fading out over the burst's duration.
   const dashTimeLeft = state.dashTimeLeft || 0;
