@@ -233,6 +233,28 @@ function updateSpellbookLockState() {
   }
 }
 
+// Everything else that should survive a reload but doesn't fit the
+// spell-unlock shape above — whether the Elder's granted a weapon yet,
+// whether the village's path/arena has been broken open. Same
+// small-key-per-concern persistence style as UNLOCK_STORAGE_KEY/
+// WORLD_SEED_KEY rather than one big save blob.
+const PROGRESS_STORAGE_KEY = "rpgGameProgress";
+
+let progress = { hasWeapon: false, villagePathOpen: false };
+try {
+  progress = { ...progress, ...JSON.parse(localStorage.getItem(PROGRESS_STORAGE_KEY) || "{}") };
+} catch {
+  progress = { hasWeapon: false, villagePathOpen: false };
+}
+
+function persistProgress() {
+  try {
+    localStorage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(progress));
+  } catch {
+    // Private browsing / storage disabled — same harmless degradation as persistUnlocks().
+  }
+}
+
 // --- Spellcasting ------------------------------------------------------------
 
 // Same combos shown in the spellbook UI (index.html) — kept in sync with it
@@ -1286,7 +1308,11 @@ function resolveWeaponHit() {
         if (obs.kind === "villagePathBlock" && Math.hypot(obs.x - tree.x, obs.y - tree.y) < 5) obstacles.splice(i, 1);
       }
     }
-    if (village.pathBreakTrees.every((t) => t.destroyed)) village.pathOpen = true;
+    if (village.pathBreakTrees.every((t) => t.destroyed)) {
+      village.pathOpen = true;
+      progress.villagePathOpen = true;
+      persistProgress();
+    }
   }
 }
 
@@ -1413,7 +1439,7 @@ class Player {
     this.isWalking = false;
     this.maxHealth = 100;
     this.health = 100;
-    this.hasWeapon = false; // granted by the Elder — see NPC_DEFS
+    this.hasWeapon = progress.hasWeapon; // granted by the Elder — see NPC_DEFS; persisted across reloads
     this.animPhase = 0;
     this.swingTimeLeft = 0;
     this.hitThisSwing = false; // resolveWeaponHit()'s once-per-swing guard
@@ -2710,6 +2736,8 @@ function createVillageRng(seed) {
 function grantWeapon() {
   if (player.hasWeapon) return;
   player.hasWeapon = true;
+  progress.hasWeapon = true;
+  persistProgress();
   Sound.heal(); // reuse the "gained something" chime — no dedicated one yet
 }
 
@@ -2855,13 +2883,14 @@ function generateVillage() {
   // roughly VILLAGE_PATH_X0 - 40, so this specific spread is what keeps
   // every tree within WEAPON_RANGE from that one legal standing spot right
   // in front of the cluster.
+  const pathAlreadyOpen = progress.villagePathOpen;
   const pathBreakTrees = [];
   for (const yOffset of [-50, 0, 50]) {
     const x = VILLAGE_PATH_X0 + 10;
     const y = VILLAGE_CENTER.y + yOffset;
-    const tree = { x, y, type: "dead", scale: 1.05 + rng() * 0.15, destroyed: false };
+    const tree = { x, y, type: "dead", scale: 1.05 + rng() * 0.15, destroyed: pathAlreadyOpen };
     pathBreakTrees.push(tree);
-    obstacles.push({ type: "circle", kind: "villagePathBlock", x, y, radius: 50, expiresAt: Infinity });
+    if (!pathAlreadyOpen) obstacles.push({ type: "circle", kind: "villagePathBlock", x, y, radius: 50, expiresAt: Infinity });
   }
 
   for (const item of decor) {
@@ -2875,7 +2904,7 @@ function generateVillage() {
     npcs,
     decor,
     pathBreakTrees,
-    pathOpen: false,
+    pathOpen: pathAlreadyOpen,
     campfire: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y, scale: 1, flip: false },
     renderGrid,
     spawnPoint: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y + 90 },
@@ -3119,15 +3148,16 @@ const DEV_COMMANDS = {
       closeDialogue();
     },
   },
-  // Wipes the save (unlocked spells + the persisted world seed) and
-  // reloads — the simplest way to guarantee every bit of derived state
-  // (village gate, biome layout, everything) actually starts fresh rather
-  // than trying to hand-reset it all in place.
+  // Wipes the save (unlocked spells + weapon/village progress + the
+  // persisted world seed) and reloads — the simplest way to guarantee every
+  // bit of derived state (village path, biome layout, everything) actually
+  // starts fresh rather than trying to hand-reset it all in place.
   reset: {
     argOptions: () => [],
     run() {
       try {
         localStorage.removeItem(UNLOCK_STORAGE_KEY);
+        localStorage.removeItem(PROGRESS_STORAGE_KEY);
         localStorage.removeItem(WORLD_SEED_KEY);
       } catch {
         // Nothing to clear if storage was never available.
