@@ -310,6 +310,30 @@ html, body {
   transform: scale(1);
 }
 
+/* Game version — same held-Tab visibility as the player list, top-right so
+   it never collides with the health bar (top-left) or boss bar (top-center). */
+#game-version {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #f0e6d2;
+  font-family: "Nunito", sans-serif;
+  font-size: 12px;
+  border-radius: 6px;
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+  z-index: 15;
+}
+
+#game-version.visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
 .player-list-title {
   font-family: "Amatic SC", cursive;
   font-size: 20px;

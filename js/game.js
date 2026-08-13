@@ -7,6 +7,13 @@ const lobbyEl = document.getElementById("lobby"); // start-of-session solo/host/
 const campfirePromptEl = document.getElementById("campfire-prompt");
 const playerListEl = document.getElementById("player-list");
 const playerListItemsEl = document.getElementById("player-list-items");
+const gameVersionEl = document.getElementById("game-version");
+
+// Bump manually on notable changes — nothing reads or derives this
+// automatically (no package.json in a build-step-free project like this
+// one), it's purely a shown-to-the-player build marker.
+const GAME_VERSION = "0.1.0";
+gameVersionEl.textContent = `v${GAME_VERSION}`;
 const healthBarFillEl = document.getElementById("health-bar-fill");
 const healthBarSheenEl = document.getElementById("health-bar-sheen");
 const damageVignetteEl = document.getElementById("damage-vignette");
@@ -4588,6 +4595,7 @@ function loop(now) {
   // the preventDefault condition in the keydown listener above).
   playerListEl.classList.toggle("visible", keys.tab && !uiBlocking);
   if (playerListEl.classList.contains("visible")) updatePlayerList(mp);
+  gameVersionEl.classList.toggle("visible", keys.tab && !uiBlocking);
 
   // The player is always drawn at canvas center, so scaling around that
   // same point zooms in on them for free — no per-object math needed.
