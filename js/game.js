@@ -72,11 +72,12 @@ resizeCanvas();
 
 // --- Input -----------------------------------------------------------------
 
-// Casting/spellbook are locked out entirely for now — the Elder only gives
-// the player their weapon (see NPC_DEFS below), and spellcasting is meant
-// to open up later through other NPCs. Flipping this back on is all that's
-// needed once that content exists; every casting code path below already
-// just works off it.
+// Casting/spellbook are locked out until the Chief's Challenge grants Ember
+// Bolt (see "--- Village Arena ---" below) — every casting code path
+// already just works off this flag, no separate disable logic needed.
+// Re-initialized from progress.spellsEnabled once that's loaded, a little
+// further down; starts false here only because progress isn't loaded yet
+// at this point in the file.
 let SPELLS_ENABLED = false;
 
 const keys = {
@@ -242,12 +243,15 @@ function updateSpellbookLockState() {
 // WORLD_SEED_KEY rather than one big save blob.
 const PROGRESS_STORAGE_KEY = "rpgGameProgress";
 
-let progress = { hasWeapon: false, villagePathOpen: false };
+const DEFAULT_PROGRESS = { hasWeapon: false, villagePathOpen: false, sparringDefeated: false, chiefDefeated: false, spellsEnabled: false };
+
+let progress = { ...DEFAULT_PROGRESS };
 try {
   progress = { ...progress, ...JSON.parse(localStorage.getItem(PROGRESS_STORAGE_KEY) || "{}") };
 } catch {
-  progress = { hasWeapon: false, villagePathOpen: false };
+  progress = { ...DEFAULT_PROGRESS };
 }
+SPELLS_ENABLED = progress.spellsEnabled;
 
 function persistProgress() {
   try {
@@ -269,6 +273,7 @@ const SPELLS = [
   { name: "Rockfall", element: "earth", combo: ["down", "down", "right", "up"] },
   { name: "Gust Step", element: "wind", combo: ["left", "right"] },
   { name: "Earth Breaker", element: "earth", combo: ["down", "left", "down"] },
+  { name: "Ember Bolt", element: "fire", combo: ["right", "up", "right"] },
 ];
 
 const ARROW_KEY_TO_DIR = { arrowup: "up", arrowdown: "down", arrowleft: "left", arrowright: "right" };
@@ -338,6 +343,12 @@ function triggerSpellEffect(spellName) {
       break;
     case "Earth Breaker":
       castEarthBreaker();
+      break;
+    case "Ember Bolt":
+      // The Chief's reward — same fire-bolt projectile as Ember Burst
+      // rather than a distinct mechanic; the reward is the spell existing
+      // at all this early, not a mechanically new one.
+      castFireBolt();
       break;
   }
 }
@@ -1541,6 +1552,27 @@ const ENEMY_TYPES = {
     attackWindup: 0.55, attackCooldown: 1.8, attackDamage: 16, speed: 85,
     respawnMs: Infinity, scale: 0.62, rig: ForestAssets.enemyRigs.crystalGolem,
   },
+  // Village Arena — a one-off duo, not a wandering species (respawnMs:
+  // Infinity, same reasoning as the boss). type.evasive drives the
+  // dart-in-strike-retreat rhythm in updateEnemy() rather than a straight
+  // chase — see EVADE_RETREAT_DURATION.
+  sparringDummy: {
+    displayName: "Sparring Partner", biomeId: "village", family: "segmentedChain", evasive: true,
+    maxHealth: 65, aggroRadius: 280, leashRadius: 360, attackRange: 55,
+    attackWindup: 0.3, attackCooldown: 1.1, attackDamage: 6, speed: 145,
+    respawnMs: Infinity, scale: 0.52, rig: ForestAssets.enemyRigs.sparringDummy,
+  },
+  // The Chief, Arena Lord — Village Arena's boss, only fightable after both
+  // sparring partners are down (see maybeSpawnChief()). Torch-driven attacks
+  // (see resolveChiefAttack()) cycle a melee swing with a longer-range fire
+  // slam, both leaving scorch marks — "give him lots of fiery impact
+  // effects and abilities" per the brief.
+  chief: {
+    displayName: "The Chief", biomeId: "village", family: "chief", isBoss: true,
+    maxHealth: 260, aggroRadius: 900, leashRadius: 900, attackRange: 85,
+    attackWindup: 0.5, attackCooldown: 1.6, attackDamage: 14, speed: 110,
+    respawnMs: Infinity, scale: 0.58, rig: ForestAssets.enemyRigs.chief,
+  },
 };
 
 let enemies = [];
@@ -1591,8 +1623,22 @@ function killEnemy(enemy) {
   enemy.deathTimer = ENEMY_TYPES[enemy.kind].respawnMs;
 }
 
+// How long an evasive enemy (type.evasive — currently just the sparring
+// partners) backs away for after landing a hit, before closing in again.
+const EVADE_RETREAT_DURATION = 0.6;
+
 function updateEnemy(enemy, dt) {
   const type = ENEMY_TYPES[enemy.kind];
+
+  // Village Arena's sparring duo/Chief exist (and are drawn) from the
+  // moment the village loads — so the place reads as lived-in rather than
+  // popping enemies out of thin air — but stay completely inert (never
+  // aggro, never move beyond idle sway) until their fight is actually
+  // triggered. See "--- Village Arena ---" below.
+  if (enemy.inert) {
+    enemy.animPhase += dt;
+    return;
+  }
 
   if (enemy.state === "dead") {
     enemy.deathTimer -= dt * 1000;
@@ -1616,17 +1662,26 @@ function updateEnemy(enemy, dt) {
       if (enemy.attackWindup <= 0) {
         // The Crystal Golem cycles between three attacks (see
         // resolveCrystalGolemAttack) instead of the single melee-range
-        // check every other enemy uses.
+        // check every other enemy uses; the Chief similarly breaks out its
+        // longer-range fire slam (see resolveChiefSlam()) here too.
         if (enemy.kind === "crystalGolem" && enemy.crystalAttackPattern !== "melee") {
           resolveCrystalGolemAttack(enemy, distToPlayer);
+        } else if (enemy.kind === "chief" && enemy.chiefAttackPattern === "slam") {
+          resolveChiefSlam(enemy);
         } else if (distToPlayer <= type.attackRange + 20) {
           player.takeDamage(type.attackDamage);
           Sound.enemyHitPlayer();
+          // "Lots of fiery impact effects" — every torch swing that lands
+          // gets a fire burst at the point of contact, not just the slam.
+          if (enemy.kind === "chief") spawnEffect(player.x, player.y, "fireImpact", 0.4, 1);
         }
       }
     }
     if (enemy.attackCooldown <= 0) {
       enemy.state = distToPlayer <= type.aggroRadius ? "chasing" : "idle";
+      // Sparring-style "dart in, strike, back off" rhythm — see the
+      // retreatTimer handling in the chasing branch below.
+      if (type.evasive) enemy.retreatTimer = EVADE_RETREAT_DURATION;
     }
     enemy.animPhase += dt;
     return;
@@ -1641,7 +1696,10 @@ function updateEnemy(enemy, dt) {
   }
 
   if (enemy.state === "chasing") {
-    if (distToPlayer <= type.attackRange) {
+    const retreating = type.evasive && enemy.retreatTimer > 0;
+    if (retreating) enemy.retreatTimer -= dt;
+
+    if (!retreating && distToPlayer <= type.attackRange) {
       enemy.state = "attacking";
       enemy.attackWindup = type.attackWindup;
       enemy.attackCooldown = type.attackCooldown;
@@ -1654,10 +1712,20 @@ function updateEnemy(enemy, dt) {
       if (enemy.kind === "crystalGolem") {
         const r = RNG.random();
         enemy.crystalAttackPattern = r < 0.4 ? "melee" : r < 0.7 ? "ranged" : "slam";
+      } else if (enemy.kind === "chief") {
+        enemy.chiefAttackPattern = RNG.random() < 0.55 ? "melee" : "slam";
       }
     } else {
-      const dx = (player.x - enemy.x) / (distToPlayer || 1);
-      const dy = (player.y - enemy.y) / (distToPlayer || 1);
+      // Retreating moves directly away from the player instead of toward —
+      // everything else (speed, water/obstacle collision) is identical to
+      // the normal close-the-distance case below. Facing always points at
+      // the player either way, same as a real spar — backing off doesn't
+      // mean looking away from them.
+      const towardX = (player.x - enemy.x) / (distToPlayer || 1);
+      const towardY = (player.y - enemy.y) / (distToPlayer || 1);
+      const moveSign = retreating ? -1 : 1;
+      const dx = towardX * moveSign;
+      const dy = towardY * moveSign;
       const newX = enemy.x + dx * type.speed * dt;
       const newY = enemy.y + dy * type.speed * dt;
       const blockedByWater = !type.ignoresWater && isPointInWater(newX, newY);
@@ -1665,8 +1733,8 @@ function updateEnemy(enemy, dt) {
         enemy.x = newX;
         enemy.y = newY;
       }
-      enemy.facingX = dx;
-      enemy.facingY = dy;
+      enemy.facingX = towardX;
+      enemy.facingY = towardY;
     }
   }
 
@@ -1882,6 +1950,71 @@ function drawGolemEnemy(enemy, type, camera) {
   drawEnemyHealthBar(enemy, type, flip, camera);
 }
 
+// --- Enemy family: chief (Village Arena boss) -------------------------------
+// Bespoke draw order (cape behind legs) rather than drawGolemEnemy()'s fixed
+// one, but reuses computeGolemAngles() for idle sway/walk cycle/attack
+// windup-strike — same joint set (head/torso/armL/armR/legL/legR), just
+// built from chiefRig's mixed polygon/ellipse segments instead of golem's
+// polygon-only rock blobs.
+
+function drawChiefSegment(key, pivot, angle, enemy, type, flip, camera) {
+  const seg = type.rig.segments[key];
+  if (seg.kind === "ellipse") drawEnemyEllipse(seg.center, seg.rx, seg.ry, pivot, angle, enemy, type, flip, camera, seg.fill);
+  else drawEnemyPolygon(seg.points, pivot, angle, enemy, type, flip, camera, seg.fill);
+}
+
+function drawChiefEnemy(enemy, type, camera) {
+  if (enemy.state === "dead") return;
+
+  const rig = type.rig;
+  const flip = enemy.facingX < 0 ? -1 : 1;
+  const angles = computeGolemAngles(enemy, type);
+
+  drawEnemyShadow(enemy, type, flip, camera);
+
+  const cape = rig.groups.cape;
+  for (const key of cape.segments) drawChiefSegment(key, cape.pivot, angles.torso, enemy, type, flip, camera);
+
+  const legL = rig.groups.legL, legR = rig.groups.legR;
+  for (const key of legL.segments) drawChiefSegment(key, legL.pivot, angles.legL, enemy, type, flip, camera);
+  for (const key of legR.segments) drawChiefSegment(key, legR.pivot, angles.legR, enemy, type, flip, camera);
+
+  const armL = rig.groups.armL;
+  for (const key of armL.segments) drawChiefSegment(key, armL.pivot, angles.armL, enemy, type, flip, camera);
+
+  const torso = rig.groups.torso;
+  for (const key of torso.segments) drawChiefSegment(key, torso.pivot, angles.torso, enemy, type, flip, camera);
+
+  const armR = rig.groups.armR;
+  for (const key of armR.segments) drawChiefSegment(key, armR.pivot, angles.armR, enemy, type, flip, camera);
+
+  // Torch glow — a soft radial gradient (same trick as the player weapon's
+  // own glow), not a flat-fill segment, so it needs its own draw call
+  // rather than going through drawChiefSegment().
+  const glowWorld = enemyLocalToWorld(rotateAround(rig.torchGlowCenter, armR.pivot, angles.armR), enemy, type, flip);
+  const gx = glowWorld.x - camera.x, gy = glowWorld.y - camera.y;
+  const glowR = 32 * type.scale;
+  const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, glowR);
+  grad.addColorStop(0, "rgba(232, 162, 74, 0.6)");
+  grad.addColorStop(1, "rgba(232, 162, 74, 0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(gx, gy, glowR, 0, Math.PI * 2);
+  ctx.fill();
+
+  const head = rig.groups.head;
+  for (const key of head.segments) drawChiefSegment(key, head.pivot, angles.head, enemy, type, flip, camera);
+
+  const eyeWorld = enemyLocalToWorld(rotateAround(rig.eyeGlow, head.pivot, angles.head), enemy, type, flip);
+  ctx.fillStyle = "#8fe0ff";
+  ctx.beginPath();
+  ctx.arc(eyeWorld.x - camera.x, eyeWorld.y - camera.y, rig.eyeGlow.r * type.scale, 0, Math.PI * 2);
+  ctx.fill();
+
+  // No floating health bar — the Chief is a boss (ENEMY_TYPES.chief.isBoss);
+  // see updateBossHealthBarUI() for the shared #boss-health-bar HUD instead.
+}
+
 // --- Enemy family: quadruped (torso + head + 4 legs) ----------------------
 // Shared by Crag Ram (Mountain Foothills) and Bramble Boar (Sunmeadow
 // Clearing) — same rig shape, different decorations (horns vs. tusk/bristle,
@@ -1982,13 +2115,18 @@ function drawSegmentedChainEnemy(enemy, type, camera) {
   const headHump = humpOf("head");
   const withHeadOffset = (p) => ({ x: p.x, y: p.y - headHump });
 
-  ctx.fillStyle = "#2a1f18";
-  const mouthWorld = enemyLocalToWorld(withHeadOffset(rig.mouth), enemy, type, flip);
-  ctx.beginPath();
-  ctx.arc(mouthWorld.x - camera.x, mouthWorld.y - camera.y, rig.mouth.r * type.scale, 0, Math.PI * 2);
-  ctx.fill();
+  // Mouth/fangs/drips are Mire Leech specifics, not part of the shared
+  // chain shape — the sparring dummy rig (same family, reskinned) omits
+  // all three.
+  if (rig.mouth) {
+    ctx.fillStyle = "#2a1f18";
+    const mouthWorld = enemyLocalToWorld(withHeadOffset(rig.mouth), enemy, type, flip);
+    ctx.beginPath();
+    ctx.arc(mouthWorld.x - camera.x, mouthWorld.y - camera.y, rig.mouth.r * type.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  for (const fang of rig.fangs) {
+  for (const fang of rig.fangs || []) {
     const nums = fang.match(/-?[\d.]+/g).map(Number);
     ctx.beginPath();
     for (let i = 0; i < nums.length; i += 2) {
@@ -2011,17 +2149,19 @@ function drawSegmentedChainEnemy(enemy, type, camera) {
     ctx.fill();
   }
 
-  const tailHump = humpOf("tail");
-  ctx.save();
-  ctx.fillStyle = "#3a4a2a";
-  ctx.globalAlpha = 0.7;
-  for (const drip of rig.drips) {
-    const world = enemyLocalToWorld({ x: drip.x, y: drip.y - tailHump }, enemy, type, flip);
-    ctx.beginPath();
-    ctx.ellipse(world.x - camera.x, world.y - camera.y, drip.rx * type.scale, drip.ry * type.scale, 0, 0, Math.PI * 2);
-    ctx.fill();
+  if (rig.drips) {
+    const tailHump = humpOf("tail");
+    ctx.save();
+    ctx.fillStyle = "#3a4a2a";
+    ctx.globalAlpha = 0.7;
+    for (const drip of rig.drips) {
+      const world = enemyLocalToWorld({ x: drip.x, y: drip.y - tailHump }, enemy, type, flip);
+      ctx.beginPath();
+      ctx.ellipse(world.x - camera.x, world.y - camera.y, drip.rx * type.scale, drip.ry * type.scale, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
-  ctx.restore();
 
   drawEnemyHealthBar(enemy, type, flip, camera);
 }
@@ -2142,6 +2282,7 @@ function drawEnemy(enemy, camera) {
     case "segmentedChain": drawSegmentedChainEnemy(enemy, type, camera); break;
     case "floaty": drawFloatyEnemy(enemy, type, camera); break;
     case "radialLegs": drawRadialLegsEnemy(enemy, type, camera); break;
+    case "chief": drawChiefEnemy(enemy, type, camera); break;
   }
 }
 
@@ -2549,6 +2690,23 @@ function resolveCrystalGolemAttack(enemy, distToPlayer) {
   }
 }
 
+const CHIEF_SLAM_RANGE = 190;
+const CHIEF_SLAM_DAMAGE = 18;
+
+// The Chief's longer-range fire slam (see the chiefAttackPattern roll in
+// updateEnemy) — a burst at the Chief's own feet plus a second one thrown
+// partway toward the player, "lots of fiery impact effects" even on a
+// miss; only actually damages within CHIEF_SLAM_RANGE.
+function resolveChiefSlam(enemy) {
+  spawnEffect(enemy.x, enemy.y, "fireImpact", 0.5, 2.2);
+  const dx = player.x - enemy.x, dy = player.y - enemy.y;
+  spawnEffect(enemy.x + dx * 0.5, enemy.y + dy * 0.5, "fireImpact", 0.4, 1.4);
+  if (Math.hypot(dx, dy) <= CHIEF_SLAM_RANGE) {
+    player.takeDamage(CHIEF_SLAM_DAMAGE);
+    Sound.enemyHitPlayer();
+  }
+}
+
 function updateBossProjectiles(dt) {
   for (let i = bossProjectiles.length - 1; i >= 0; i--) {
     const p = bossProjectiles[i];
@@ -2856,7 +3014,19 @@ function generateVillage() {
   }
 
   place("hubFeatures", "noticeBoard", 110, -70);
-  decor.push({ category: "hubFeatures", kind: "arenaRing", x: VILLAGE_ARENA_CENTER.x, y: VILLAGE_ARENA_CENTER.y, scale: 1.8, flip: false });
+
+  function placeArena(category, kind, x, y, scale = 1, flip = false) {
+    decor.push({ category, kind, x: VILLAGE_ARENA_CENTER.x + x, y: VILLAGE_ARENA_CENTER.y + y, scale, flip });
+  }
+
+  placeArena("hubFeatures", "arenaRing", 0, 0, 1.8);
+  // A small homey cluster around where the Chief waits before his fight
+  // (see ARENA_CHIEF_HOME_OFFSET) — huts and a second campfire — so the
+  // arena reads as somewhere the sparring duo/Chief actually live, not
+  // just an empty fighting pit.
+  placeArena("hubFeatures", "hut", ARENA_CHIEF_HOME_OFFSET.x - 150, ARENA_CHIEF_HOME_OFFSET.y - 10, 1.1);
+  placeArena("hubFeatures", "lodge", ARENA_CHIEF_HOME_OFFSET.x + 140, ARENA_CHIEF_HOME_OFFSET.y + 20, 1.05);
+  placeArena("campfire", null, ARENA_CHIEF_HOME_OFFSET.x - 10, ARENA_CHIEF_HOME_OFFSET.y + 100, 0.9);
 
   const treeTypes = ["common", "birch", "pine", "willow", "elder"];
   const gapWidth = VILLAGE_PATH_HALF_WIDTH * 2 + 40; // a little wider than the corridor itself so trees don't crowd its mouth
@@ -2915,6 +3085,8 @@ function generateVillage() {
     renderGrid,
     spawnPoint: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y + 90 },
   };
+
+  spawnVillageArena(); // see "--- Village Arena ---" below
 }
 
 function drawVillageGround() {
@@ -2946,6 +3118,12 @@ function drawVillage(camera, mp) {
   const viewCenterY = camera.y + canvas.height / 2;
   village.renderGrid.queryRect(viewCenterX - viewHalfW, viewCenterY - viewHalfH, viewCenterX + viewHalfW, viewCenterY + viewHalfH, drawables);
   for (const npc of village.npcs) drawables.push({ y: npc.y, kind: "npc", item: npc });
+  // Village Arena's sparring duo/Chief — see "--- Village Arena ---" below.
+  // Live in the same shared `enemies` array as every world enemy (their
+  // distance-to-player checks in updateEnemy() just never trigger anything
+  // while the player's off in the world, since village/world coordinates
+  // never overlap — see VILLAGE_CENTER's comment), so no area filter needed.
+  for (const enemy of enemies) drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
   if (mp) {
     for (const remote of mp.getRemotePlayers()) drawables.push({ y: remote.y, kind: "remote", item: remote });
   }
@@ -2959,6 +3137,7 @@ function drawVillage(camera, mp) {
       case "hubFeatures": drawHubFeature(d.item, camera); break;
       case "npc": drawNpc(d.item, camera); break;
       case "campfire": drawCampfire(d.item, camera); break;
+      case "enemy": drawEnemy(d.item, camera); break;
       case "remote": drawPlayerLike(ctx, camera, { ...d.item, radius: 14 }); break;
       case "player": player.draw(ctx, camera); break;
     }
@@ -3076,6 +3255,117 @@ function drawBossArena(camera) {
     for (const p of points) {
       drawGroundSprite(ForestAssets.crystalBarrier, { x: p.x, y: p.y, scale: 1.15, flip: false }, camera);
     }
+  }
+}
+
+// --- Village Arena: Sparring Duo & The Chief --------------------------------
+
+// The sparring duo and the Chief exist (and are drawn, standing around)
+// from the moment the village loads — so the arena reads as lived-in
+// rather than popping enemies out of thin air — but stay `inert` (see
+// updateEnemy()'s guard) until each fight is actually triggered by
+// stepping up and pressing F. Two sequential fights, not one: the sparring
+// duo first, then the Chief only becomes challengeable once that's won.
+// No visual barrier prop (unlike the crystal barrier ring) — the
+// hubFeatures.arenaRing sprite's own fence posts (see generateVillage())
+// already read as "this is a bounded ring"; the obstacles below just make
+// that boundary real while a fight is actually happening.
+const ARENA_RING_RX = 280;
+const ARENA_RING_RY = 170;
+const ARENA_INTERACT_RADIUS = 320;
+// Where the Chief waits before his fight — see generateVillage()'s homey
+// decor cluster, which is placed around this same offset.
+const ARENA_CHIEF_HOME_OFFSET = { x: 40, y: -420 };
+
+let villageArenaState = null; // built once per village by spawnVillageArena()
+
+function spawnVillageArena() {
+  const center = VILLAGE_ARENA_CENTER;
+
+  const dummyA = makeEnemy("sparringDummy", center.x - 70, center.y);
+  const dummyB = makeEnemy("sparringDummy", center.x + 70, center.y);
+  const chiefEnemy = makeEnemy("chief", center.x + ARENA_CHIEF_HOME_OFFSET.x, center.y + ARENA_CHIEF_HOME_OFFSET.y);
+
+  // Resume from wherever progress.json-style state left off (see
+  // PROGRESS_STORAGE_KEY) rather than always starting fresh at "dormant".
+  if (progress.chiefDefeated) {
+    dummyA.state = dummyB.state = chiefEnemy.state = "dead";
+  } else if (progress.sparringDefeated) {
+    dummyA.state = dummyB.state = "dead";
+    chiefEnemy.inert = true;
+  } else {
+    dummyA.inert = dummyB.inert = chiefEnemy.inert = true;
+  }
+
+  enemies.push(dummyA, dummyB, chiefEnemy);
+
+  villageArenaState = {
+    center,
+    phase: progress.chiefDefeated ? "defeated" : progress.sparringDefeated ? "sparringWon" : "dormant",
+    barrierObstacles: [],
+    sparringEnemies: [dummyA, dummyB],
+    chiefEnemy,
+  };
+}
+
+// 16 points, not the crystal barrier's 8 — that ring is purely decorative
+// backing (crystalBarrier props visually sell the wall even where two
+// circles don't quite overlap), but this one has no visual at all, so the
+// collision itself has to be airtight. At 16 points around this oval,
+// adjacent 55px-radius circles are ~90px apart center-to-center — well
+// inside touching distance, so there's no gap-sized enough to slip through.
+function sealArenaBarrier() {
+  const points = ForestAssets.barrierRingPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 16);
+  villageArenaState.barrierObstacles = points.map((p) => ({ type: "circle", kind: "arenaBarrier", x: p.x, y: p.y, radius: 55, expiresAt: Infinity }));
+  obstacles.push(...villageArenaState.barrierObstacles);
+}
+
+function dropArenaBarrier() {
+  for (const obs of villageArenaState.barrierObstacles) {
+    const idx = obstacles.indexOf(obs);
+    if (idx !== -1) obstacles.splice(idx, 1);
+  }
+  villageArenaState.barrierObstacles = [];
+}
+
+function activateSparringFight() {
+  if (!villageArenaState || villageArenaState.phase !== "dormant") return;
+  villageArenaState.phase = "sparring";
+  sealArenaBarrier();
+  Sound.cast("wind");
+  for (const dummy of villageArenaState.sparringEnemies) {
+    dummy.inert = false;
+    dummy.state = "idle"; // let aggroRadius pull them in naturally rather than snapping straight to chasing
+  }
+}
+
+function activateChiefFight() {
+  if (!villageArenaState || villageArenaState.phase !== "sparringWon") return;
+  villageArenaState.phase = "chief";
+  sealArenaBarrier();
+  Sound.cast("wind");
+  const chiefEnemy = villageArenaState.chiefEnemy;
+  chiefEnemy.inert = false;
+  chiefEnemy.x = villageArenaState.center.x; // "steps into the ring" per the design brief
+  chiefEnemy.y = villageArenaState.center.y;
+  chiefEnemy.state = "chasing"; // a boss doesn't get an idle grace period
+}
+
+function updateVillageArena() {
+  if (!villageArenaState) return;
+  if (villageArenaState.phase === "sparring" && villageArenaState.sparringEnemies.every((e) => e.state === "dead")) {
+    villageArenaState.phase = "sparringWon";
+    dropArenaBarrier();
+    progress.sparringDefeated = true;
+    persistProgress();
+  } else if (villageArenaState.phase === "chief" && villageArenaState.chiefEnemy.state === "dead") {
+    villageArenaState.phase = "defeated";
+    dropArenaBarrier();
+    progress.chiefDefeated = true;
+    SPELLS_ENABLED = true;
+    progress.spellsEnabled = true;
+    persistProgress();
+    unlockSpell("Ember Bolt");
   }
 }
 
@@ -3824,15 +4114,19 @@ function updatePlayerList(mp) {
   }
 }
 
-// Reads the open world's Crystal Golem fight, if one is live, and updates
-// the shared boss health bar HUD, hiding it otherwise. Checked every frame
-// rather than tracked as its own bit of state, since "which fight (if any)
-// is live" is already fully derivable from bossArenaState.
+// Reads whichever boss fight is currently live (the open world's Crystal
+// Golem, or the village's Chief) and updates the shared boss health bar
+// HUD, hiding it otherwise. Checked every frame rather than tracked as its
+// own bit of state, since "which fight (if any) is live" is already fully
+// derivable from bossArenaState/villageArenaState.
 function updateBossHealthBarUI() {
   let boss = null;
   if (currentArea === "world" && bossArenaState && bossArenaState.golemEnemy) {
     const golemEnemy = bossArenaState.golemEnemy;
     if (golemEnemy.state !== "dead") boss = { enemy: golemEnemy, name: "Crystal Golem" };
+  } else if (currentArea === "village" && villageArenaState && villageArenaState.phase === "chief") {
+    const chiefEnemy = villageArenaState.chiefEnemy;
+    if (chiefEnemy.state !== "dead") boss = { enemy: chiefEnemy, name: "The Chief" };
   }
 
   if (!boss) {
@@ -3880,6 +4174,12 @@ function loop(now) {
   const nearRune =
     currentArea === "world" && !inCampfireRange && bossArenaState && bossArenaState.runeState === "dormant" &&
     Math.hypot(player.x - bossArenaState.center.x, player.y - bossArenaState.center.y) < RUNE_INTERACT_RADIUS;
+  const nearSparringRing =
+    currentArea === "village" && !inCampfireRange && villageArenaState && villageArenaState.phase === "dormant" &&
+    Math.hypot(player.x - villageArenaState.center.x, player.y - villageArenaState.center.y) < ARENA_INTERACT_RADIUS;
+  const nearChief =
+    currentArea === "village" && !inCampfireRange && villageArenaState && villageArenaState.phase === "sparringWon" &&
+    Math.hypot(player.x - villageArenaState.chiefEnemy.x, player.y - villageArenaState.chiefEnemy.y) < NPC_INTERACT_RADIUS;
 
   const fJustPressed = keys.f && !fWasPressed;
   fWasPressed = keys.f;
@@ -3901,6 +4201,10 @@ function loop(now) {
       openDialogue(nearbyNpc);
     } else if (nearRune) {
       activateBossArena();
+    } else if (nearSparringRing) {
+      activateSparringFight();
+    } else if (nearChief) {
+      activateChiefFight();
     }
   } else if (keys.escape) {
     if (activeDialogue) closeDialogue();
@@ -3924,6 +4228,12 @@ function loop(now) {
   } else if (nearRune) {
     interactPromptEl.classList.remove("hidden");
     interactPromptEl.innerHTML = "Press <strong>F</strong> to awaken the rune";
+  } else if (nearSparringRing) {
+    interactPromptEl.classList.remove("hidden");
+    interactPromptEl.innerHTML = "Press <strong>F</strong> to challenge the sparring partners";
+  } else if (nearChief) {
+    interactPromptEl.classList.remove("hidden");
+    interactPromptEl.innerHTML = "Press <strong>F</strong> to challenge the Chief";
   } else {
     interactPromptEl.classList.add("hidden");
   }
@@ -3967,6 +4277,7 @@ function loop(now) {
     pruneExpired(obstacles, now);
     pruneExpired(iceBridges, now);
     updateBossArena();
+    updateVillageArena();
   }
 
   updateCamera();

@@ -946,6 +946,24 @@ const ForestAssets = (() => {
     viewHeight: 200,
   };
 
+  // Sparring Partner (Village Arena) — same segmented-chain body plan as
+  // the Mire Leech (three independently-bobbing blobs), reskinned as a
+  // stacked straw-and-burlap training dummy: a weighted base that doesn't
+  // tip over, a bundled torso, a wrapped head. No mouth/fangs/drips — those
+  // are optional in drawSegmentedChainEnemy() specifically so this rig can
+  // omit them.
+  const sparringDummyRig = {
+    segments: {
+      tail: { points: blobPointList(100, 158, 30, 22, 141), fill: "#8a6a48" },
+      mid: { points: blobPointList(100, 112, 26, 30, 142), fill: "#d4a53d" },
+      head: { points: blobPointList(100, 68, 20, 18, 143), fill: "#c9a877" },
+    },
+    chainOrder: ["tail", "mid", "head"],
+    eyes: [{ x: 93, y: 64, r: 2.5 }, { x: 107, y: 64, r: 2.5 }],
+    groundAnchor: { x: 100, y: 180 },
+    viewHeight: 200,
+  };
+
   // Crag Ram (Mountain Foothills) — quadruped, same rotate-group rig shape
   // as the golem's limbs, sized for a walk cycle + headbutt telegraph.
   const cragRamRig = {
@@ -1082,7 +1100,100 @@ const ForestAssets = (() => {
     viewHeight: 380,
   };
 
-  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig, crystalGolem: crystalGolemRig };
+  // The Chief, Arena Lord (Village Arena boss) — design kit's new "Boss —
+  // The Chief" section: a wrapped guard arm, a torch-wielding weapon arm,
+  // a torn cape, over a 300x400 local space. Segmented like the golems (see
+  // that comment) but built from sampled Q-curves + limbCapsule() rather
+  // than rockPointList blobs — cloth/flesh, not stone — so it's drawn by
+  // its own drawChiefEnemy() in game.js instead of the shared
+  // drawGolemEnemy() (the cape needs to render behind the legs, which
+  // doesn't fit that function's fixed draw order).
+  const chiefRig = {
+    segments: {
+      head: { kind: "ellipse", center: { x: 150, y: 95 }, rx: 34, ry: 34, fill: "#e8c9a0" },
+      hair: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 112, y: 108 }, { x: 150, y: 132 }, { x: 188, y: 108 }, 5),
+          ...sampleQuadratic({ x: 188, y: 108 }, { x: 185, y: 96 }, { x: 150, y: 93 }, 5).slice(1),
+          ...sampleQuadratic({ x: 150, y: 93 }, { x: 115, y: 96 }, { x: 112, y: 108 }, 5).slice(1),
+        ],
+        fill: "#8a8478",
+      },
+
+      torsoOuter: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 75, y: 150 }, { x: 150, y: 125 }, { x: 225, y: 150 }, 6),
+          { x: 235, y: 335 },
+          ...sampleQuadratic({ x: 235, y: 335 }, { x: 150, y: 362 }, { x: 65, y: 335 }, 6),
+        ],
+        fill: "#3a1f1f",
+      },
+      torsoInner: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 90, y: 148 }, { x: 150, y: 128 }, { x: 210, y: 148 }, 6),
+          { x: 218, y: 330 },
+          ...sampleQuadratic({ x: 218, y: 330 }, { x: 150, y: 352 }, { x: 82, y: 330 }, 6),
+        ],
+        fill: "#a63d3d",
+      },
+      belt: { kind: "polygon", points: [{ x: 108, y: 233 }, { x: 192, y: 233 }, { x: 192, y: 249 }, { x: 108, y: 249 }], fill: "#d4a53d" },
+      beltBuckle: { kind: "ellipse", center: { x: 150, y: 241 }, rx: 8, ry: 8, fill: "#b98a4a" },
+
+      capeL: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 90, y: 140 }, { x: 55, y: 230 }, { x: 38, y: 325 }, 5),
+          { x: 68, y: 372 },
+          ...sampleQuadratic({ x: 68, y: 372 }, { x: 98, y: 300 }, { x: 108, y: 195 }, 5),
+        ],
+        fill: "#3a1f1f",
+      },
+      capeR: {
+        kind: "polygon",
+        points: [
+          ...sampleQuadratic({ x: 210, y: 140 }, { x: 245, y: 230 }, { x: 262, y: 325 }, 5),
+          { x: 232, y: 372 },
+          ...sampleQuadratic({ x: 232, y: 372 }, { x: 202, y: 300 }, { x: 192, y: 195 }, 5),
+        ],
+        fill: "#3a1f1f",
+      },
+
+      armLUpper: { kind: "polygon", points: limbCapsule(92, 178, 75, 200, 8), fill: "#a63d3d" },
+      armLLower: { kind: "polygon", points: limbCapsule(75, 200, 73, 225, 8), fill: "#a63d3d" },
+      handL: { kind: "ellipse", center: { x: 73, y: 225 }, rx: 13, ry: 13, fill: "#e8c9a0" },
+
+      armRUpper: { kind: "polygon", points: limbCapsule(208, 178, 226, 201, 8.5), fill: "#a63d3d" },
+      armRLower: { kind: "polygon", points: limbCapsule(226, 201, 230, 228, 8.5), fill: "#a63d3d" },
+      torchHandle: { kind: "polygon", points: limbCapsule(230, 228, 248, 88, 4.5), fill: "#5a4530" },
+      torchHead: { kind: "polygon", points: [{ x: 228.4, y: 42.8 }, { x: 282.2, y: 64.5 }, { x: 269.5, y: 96 }, { x: 215.7, y: 74.3 }], fill: "#7a756a" },
+      ember1: { kind: "ellipse", center: { x: 235, y: 55 }, rx: 3, ry: 3, fill: "#e8873d" },
+      ember2: { kind: "ellipse", center: { x: 262, y: 60 }, rx: 2.5, ry: 2.5, fill: "#d4a53d" },
+      ember3: { kind: "ellipse", center: { x: 250, y: 40 }, rx: 2, ry: 2, fill: "#e8873d" },
+
+      legL: { kind: "polygon", points: [{ x: 110, y: 325 }, { x: 102, y: 368 }, { x: 128, y: 368 }, { x: 124, y: 330 }], fill: "#3a1f1f" },
+      legR: { kind: "polygon", points: [{ x: 190, y: 325 }, { x: 198, y: 368 }, { x: 172, y: 368 }, { x: 176, y: 330 }], fill: "#3a1f1f" },
+      footL: { kind: "ellipse", center: { x: 112, y: 370 }, rx: 16, ry: 8, fill: "#2a1f18" },
+      footR: { kind: "ellipse", center: { x: 188, y: 370 }, rx: 16, ry: 8, fill: "#2a1f18" },
+    },
+    groups: {
+      cape: { segments: ["capeL", "capeR"], pivot: { x: 150, y: 150 } },
+      legL: { segments: ["legL", "footL"], pivot: { x: 117, y: 325 } },
+      legR: { segments: ["legR", "footR"], pivot: { x: 183, y: 325 } },
+      armL: { segments: ["armLUpper", "armLLower", "handL"], pivot: { x: 92, y: 178 } },
+      torso: { segments: ["torsoOuter", "torsoInner", "belt", "beltBuckle"], pivot: { x: 150, y: 150 } },
+      armR: { segments: ["armRUpper", "armRLower", "torchHandle", "torchHead", "ember1", "ember2", "ember3"], pivot: { x: 208, y: 178 } },
+      head: { segments: ["head", "hair"], pivot: { x: 150, y: 108 } },
+    },
+    eyeGlow: { x: 150, y: 74, r: 6 },
+    torchGlowCenter: { x: 248, y: 72 },
+    groundAnchor: { x: 150, y: 388 },
+    viewHeight: 400,
+  };
+
+  const enemyRigs = { golem: golemRig, mireLeech: mireLeechRig, cragRam: cragRamRig, frostWisp: frostWispRig, bramblingBoar: bramblingBoarRig, crystalCrawler: crystalCrawlerRig, crystalGolem: crystalGolemRig, sparringDummy: sparringDummyRig, chief: chiefRig };
 
   // --- Spawn Hub: NPCs -----------------------------------------------------
 
