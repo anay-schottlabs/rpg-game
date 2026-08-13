@@ -1579,7 +1579,7 @@ const ENEMY_TYPES = {
     displayName: "The Chief", biomeId: "village", family: "chief", isBoss: true,
     maxHealth: 260, aggroRadius: 900, leashRadius: 900, attackRange: 85,
     attackWindup: 0.5, attackCooldown: 1.6, attackDamage: 14, speed: 110,
-    respawnMs: Infinity, scale: 0.58, rig: ForestAssets.enemyRigs.chief,
+    respawnMs: Infinity, scale: 0.5, rig: ForestAssets.enemyRigs.chief,
   },
 };
 
@@ -3049,6 +3049,33 @@ function generateVillage() {
 
   place("hubFeatures", "noticeBoard", 110, -70);
 
+  // A sparse scatter of ground life around the main clearing so it doesn't
+  // read as flat green nothing — hand-placed at fixed spots (not RNG
+  // scatter, same as the rest of the village) clear of the campfire,
+  // Elder, notice board, and spawn point.
+  const villageGroundDecor = [
+    { category: "foliage", type: "flowers", x: 169, y: 141 },
+    { category: "mushroom", type: "tawnyCap", x: 52, y: 193 },
+    { category: "foliage", type: "bush", x: -82, y: 226 },
+    { category: "foliage", type: "flowers", x: -172, y: 120 },
+    { category: "mushroom", type: "redCap", x: -230, y: 0 },
+    { category: "rock", x: -164, y: -115, rockIndex: 0 },
+    { category: "foliage", type: "flowers", x: -86, y: -235 },
+    { category: "foliage", type: "bush", x: 57, y: -213 },
+    { category: "mushroom", type: "blueCap", x: 153, y: -129 },
+    { category: "mushroom", type: "cluster", x: -13, y: 149 },
+    { category: "rock", x: -263, y: 96, rockIndex: 3 },
+  ];
+  for (const d of villageGroundDecor) {
+    const x = VILLAGE_CENTER.x + d.x;
+    const y = VILLAGE_CENTER.y + d.y;
+    if (d.category === "rock") {
+      decor.push({ category: "rock", variant: ForestAssets.rocks[d.rockIndex % ForestAssets.rocks.length], x, y, scale: 1, flip: false, destroyed: false });
+    } else {
+      decor.push({ category: d.category, type: d.type, x, y, scale: 1, flip: false });
+    }
+  }
+
   function placeArena(category, kind, x, y, scale = 1, flip = false) {
     decor.push({ category, kind, x: VILLAGE_ARENA_CENTER.x + x, y: VILLAGE_ARENA_CENTER.y + y, scale, flip });
   }
@@ -3062,12 +3089,11 @@ function generateVillage() {
   const arenaRingSprite = { x: VILLAGE_ARENA_CENTER.x, y: VILLAGE_ARENA_CENTER.y, scale: 2.15, flip: false };
 
   // A small homey cluster around where the Chief waits before his fight
-  // (see ARENA_CHIEF_HOME_OFFSET) — huts and a second campfire — so the
-  // arena reads as somewhere the sparring duo/Chief actually live, not
-  // just an empty fighting pit.
+  // (see ARENA_CHIEF_HOME_OFFSET) — huts, so the arena reads as somewhere
+  // the Trainees/Chief actually live, not just an empty fighting pit. Only
+  // one campfire in the village — the interactive one at VILLAGE_CENTER.
   placeArena("hubFeatures", "hut", ARENA_CHIEF_HOME_OFFSET.x - 150, ARENA_CHIEF_HOME_OFFSET.y - 10, 1.1);
   placeArena("hubFeatures", "lodge", ARENA_CHIEF_HOME_OFFSET.x + 140, ARENA_CHIEF_HOME_OFFSET.y + 20, 1.05);
-  placeArena("campfire", null, ARENA_CHIEF_HOME_OFFSET.x - 10, ARENA_CHIEF_HOME_OFFSET.y + 100, 0.9);
 
   const treeTypes = ["common", "birch", "pine", "willow", "elder"];
   const gapWidth = VILLAGE_PATH_HALF_WIDTH * 2 + 40; // a little wider than the corridor itself so trees don't crowd its mouth
@@ -3178,6 +3204,9 @@ function drawVillage(camera, mp) {
       case "tree": drawTree(d.item, camera); break;
       case "pathBreakTree": drawPathBreakTree(d.item, camera); break;
       case "hubFeatures": drawHubFeature(d.item, camera); break;
+      case "foliage": drawFoliage(d.item, camera); break;
+      case "mushroom": drawMushroom(d.item, camera); break;
+      case "rock": drawRock(d.item, camera); break;
       case "npc": drawNpc(d.item, camera); break;
       case "campfire": drawCampfire(d.item, camera); break;
       case "enemy": drawEnemy(d.item, camera); break;
@@ -3383,14 +3412,19 @@ function spawnVillageArena() {
   };
 }
 
-// 16 points, not the crystal barrier's 8 — that ring is purely decorative
+// 24 points, not the crystal barrier's 8 — that ring is purely decorative
 // backing (crystalBarrier props visually sell the wall even where two
 // circles don't quite overlap), but this one has no visual at all, so the
-// collision itself has to be airtight. At 16 points around this oval,
-// adjacent 55px-radius circles are well within touching distance, so
-// there's no gap sized enough to slip through.
+// collision itself has to be airtight. barrierRingPoints() spaces points
+// evenly by *angle*, not by actual arc length — on a non-circular oval
+// (rx != ry) that means the worst-case gap between adjacent points is
+// notably wider than a naive circumference/count estimate suggests (it
+// peaks near the ry ends here). At 16 points the worst-case gap was ~127px
+// against only 110px of combined 55px-radius coverage — a real ~17px hole
+// a player could get stuck jittering against or occasionally slip through.
+// 24 points brings the worst-case gap to ~86px, safely under 110.
 function sealArenaBarrier() {
-  const points = ForestAssets.barrierRingPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 16);
+  const points = ForestAssets.barrierRingPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 24);
   villageArenaState.barrierObstacles = points.map((p) => ({ type: "circle", kind: "arenaBarrier", x: p.x, y: p.y, radius: 55, expiresAt: Infinity }));
   obstacles.push(...villageArenaState.barrierObstacles);
 }
