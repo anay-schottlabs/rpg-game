@@ -905,6 +905,239 @@ const ForestAssets = (() => {
         <polygon points="50,10 65,90 62,130 38,130 35,90" fill="#6b6480" stroke="#2a1f18" stroke-width="3"/>
         <polygon points="50,10 60,80 50,130 45,130 40,80" fill="url(#deepHatch)" opacity="0.3"/>
       </svg>`,
+
+    // Hollow Deep expansion — design kit's "Set Pieces" (large, one-of-a-
+    // kind landmarks — see pickFoliage()'s low weight for these four in
+    // game.js), "Crystal Formations", "Fungus & Growth", and "Ambient &
+    // Weird Details" sections. The "Overhangs & Cave Rock" section (wall/
+    // ceiling framing pieces) and "Luminous Vein Crack (Wall)" aren't
+    // included — this game has no wall/ceiling concept to hang them on,
+    // just a flat scattered ground plane.
+    motherFungus: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="200" height="240" viewBox="0 0 200 240">
+        <defs>
+          <radialGradient id="windGlow" cx="0.5" cy="0.55" r="0.5">
+            <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
+            <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="100" cy="228" rx="70" ry="10" fill="#2a1f18" opacity="0.3"/>
+        <circle cx="100" cy="150" r="80" fill="url(#windGlow)" opacity="0.3"/>
+        <rect x="82" y="150" width="36" height="70" rx="8" fill="#3a2c4a" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M20,150 Q20,95 100,90 Q180,95 180,150 Q140,170 100,164 Q60,170 20,150 Z" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="4"/>
+        <path d="M20,150 Q60,140 100,144 Q140,140 180,150" fill="none" stroke="#4a3a6a" stroke-width="2" opacity="0.6"/>
+        <path d="M40,146 Q70,150 100,150 Q130,150 160,146" fill="none" stroke="#4a3a6a" stroke-width="1.6" opacity="0.5"/>
+        <circle cx="55" cy="118" r="4" fill="#e8d8ff"/>
+        <circle cx="140" cy="110" r="3.5" fill="#d8fff2"/>
+        <circle cx="100" cy="98" r="3" fill="#e8d8ff"/>
+        <circle cx="80" cy="130" r="2.5" fill="#d8fff2" opacity="0.8"/>
+        <circle cx="125" cy="135" r="2.5" fill="#e8d8ff" opacity="0.8"/>
+      </svg>`,
+    crackedGeodeChamber: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="220" height="200" viewBox="0 0 220 200">
+        <defs>
+          <radialGradient id="caveGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#9b7fc4" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="#9b7fc4" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="110" cy="190" rx="90" ry="10" fill="#2a1f18" opacity="0.3"/>
+        <circle cx="110" cy="110" r="80" fill="url(#caveGlow)" opacity="0.5"/>
+        <polygon points="30,180 20,100 45,40 110,20 175,42 198,102 190,180" fill="#6b6480" stroke="#2a1f18" stroke-width="4"/>
+        <path d="M45,40 L95,95 L70,180" fill="none" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M175,42 L120,90 L145,180" fill="none" stroke="#2a1f18" stroke-width="3.5"/>
+        <polygon points="95,95 110,60 130,88 120,90 145,110 100,120 78,105" fill="#7a5cc4" stroke="#e8d8ff" stroke-width="2.5"/>
+        <polygon points="82,110 100,120 90,150 70,140" fill="#9b7fc4" stroke="#e8d8ff" stroke-width="2"/>
+        <polygon points="120,90 145,110 138,145 118,130" fill="#5a4a8a" stroke="#c9a8f0" stroke-width="2"/>
+        <circle cx="110" cy="100" r="8" fill="#8fe0ff"/>
+      </svg>`,
+    rootCurtain: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="200" height="260" viewBox="0 0 200 260">
+        <rect x="0" y="0" width="200" height="26" fill="#4a4055" stroke="#2a1f18" stroke-width="3"/>
+        <path d="M40,26 Q34,90 44,140 Q48,155 38,168" stroke="#5a4530" stroke-width="9" fill="none" stroke-linecap="round"/>
+        <circle cx="38" cy="170" r="8" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2"/>
+        <path d="M80,26 Q88,110 76,175 Q72,192 82,208" stroke="#5a4530" stroke-width="10" fill="none" stroke-linecap="round"/>
+        <circle cx="83" cy="211" r="9" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2"/>
+        <path d="M130,26 Q140,80 128,120 Q122,135 132,148" stroke="#5a4530" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle cx="132" cy="150" r="7" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2"/>
+        <path d="M165,26 Q172,100 160,155 Q156,172 166,190" stroke="#5a4530" stroke-width="9" fill="none" stroke-linecap="round"/>
+        <circle cx="166" cy="192" r="8" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2"/>
+        <circle cx="38" cy="190" r="2.5" fill="#a8f0e0" opacity="0.7"/>
+        <circle cx="83" cy="232" r="3" fill="#c9a8f0" opacity="0.7"/>
+        <circle cx="166" cy="212" r="2.5" fill="#c9a8f0" opacity="0.6"/>
+      </svg>`,
+    crystalFalls: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="200" height="260" viewBox="0 0 200 260">
+        <defs>
+          <radialGradient id="crystalCoreGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#8fe0ff" stop-opacity="0.9"/>
+            <stop offset="1" stop-color="#8fe0ff" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <polygon points="10,0 60,0 30,200 0,220" fill="#6b6480" stroke="#2a1f18" stroke-width="3.5"/>
+        <polygon points="190,0 145,0 175,190 200,215" fill="#6b6480" stroke="#2a1f18" stroke-width="3.5"/>
+        <path d="M65,10 Q75,90 62,160 Q58,185 68,200" stroke="#bfe3e3" stroke-width="14" fill="none" opacity="0.35" stroke-linecap="round"/>
+        <path d="M85,10 Q92,90 84,165 Q80,190 88,210" stroke="#d8f7ff" stroke-width="8" fill="none" opacity="0.55" stroke-linecap="round"/>
+        <path d="M110,10 Q100,90 112,160 Q118,185 108,205" stroke="#bfe3e3" stroke-width="10" fill="none" opacity="0.4" stroke-linecap="round"/>
+        <ellipse cx="90" cy="235" rx="70" ry="18" fill="url(#crystalCoreGlow)" opacity="0.6"/>
+        <path d="M40,232 Q90,244 150,230" stroke="#8fe0ff" stroke-width="3" fill="none" opacity="0.7"/>
+        <circle cx="80" cy="60" r="2.5" fill="#e8f9ff"/>
+        <circle cx="100" cy="120" r="2" fill="#e8f9ff" opacity="0.8"/>
+      </svg>`,
+    stalactiteCeiling: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="100" height="130" viewBox="0 0 100 130">
+        <defs>
+          <pattern id="deepHatch" width="2.8" height="2.8" patternUnits="userSpaceOnUse">
+            <path d="M0,2.8 L2.8,0" stroke="#2a1f18" stroke-width="1"/>
+            <path d="M0,0 L2.8,2.8" stroke="#2a1f18" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <polygon points="35,0 65,0 62,50 50,80 38,50" fill="#6b6480" stroke="#2a1f18" stroke-width="3"/>
+        <polygon points="40,0 60,0 55,50 50,80 45,50" fill="url(#deepHatch)" opacity="0.3"/>
+        <circle cx="50" cy="88" r="3" fill="#9b7fc4" opacity="0.8"/>
+      </svg>`,
+    crystalSpire: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="120" height="180" viewBox="0 0 120 180">
+        <defs>
+          <radialGradient id="caveGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#9b7fc4" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="#9b7fc4" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="60" cy="120" r="60" fill="url(#caveGlow)" opacity="0.4"/>
+        <polygon points="55,10 68,90 60,175 46,175 40,88" fill="#5a4a8a" stroke="#c9a8f0" stroke-width="3.5"/>
+        <polygon points="60,10 65,90 60,175 55,175 52,88" fill="#8fe0ff" opacity="0.35"/>
+        <polygon points="20,120 30,140 22,175" fill="#9b7fc4" stroke="#c9a8f0" stroke-width="2"/>
+        <polygon points="100,110 92,140 102,172" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2"/>
+      </svg>`,
+    shatteredGeodeRubble: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="160" height="100" viewBox="0 0 160 100">
+        <ellipse cx="80" cy="88" rx="72" ry="10" fill="#2a1f18" opacity="0.3"/>
+        <polygon points="20,88 14,68 30,58 40,80" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2"/>
+        <polygon points="48,88 42,62 60,48 68,78" fill="#9b7fc4" stroke="#e8d8ff" stroke-width="2"/>
+        <polygon points="80,88 74,72 88,64 96,84" fill="#5a4a8a" stroke="#c9a8f0" stroke-width="2"/>
+        <polygon points="112,88 106,66 124,54 132,80" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2"/>
+        <polygon points="140,88 136,74 148,68 152,84" fill="#9b7fc4" stroke="#e8d8ff" stroke-width="1.6"/>
+        <circle cx="55" cy="60" r="2" fill="#e8d8ff"/>
+        <circle cx="118" cy="65" r="2" fill="#e8d8ff"/>
+      </svg>`,
+    crystalArch: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="240" height="150" viewBox="0 0 240 150">
+        <defs>
+          <radialGradient id="caveGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#9b7fc4" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="#9b7fc4" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="120" cy="140" rx="105" ry="9" fill="#2a1f18" opacity="0.3"/>
+        <circle cx="120" cy="70" r="70" fill="url(#caveGlow)" opacity="0.35"/>
+        <path d="M20,138 Q22,70 60,40 Q80,25 100,45" fill="none" stroke="#5a4a8a" stroke-width="22" stroke-linecap="round"/>
+        <path d="M220,138 Q218,70 180,40 Q160,25 140,45" fill="none" stroke="#7a5cc4" stroke-width="22" stroke-linecap="round"/>
+        <path d="M20,138 Q22,70 60,40 Q80,25 100,45" fill="none" stroke="#c9a8f0" stroke-width="3"/>
+        <path d="M220,138 Q218,70 180,40 Q160,25 140,45" fill="none" stroke="#e8d8ff" stroke-width="3"/>
+        <circle cx="100" cy="45" r="10" fill="#8fe0ff" opacity="0.9"/>
+        <circle cx="140" cy="45" r="10" fill="#8fe0ff" opacity="0.9"/>
+      </svg>`,
+    fairyRing: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="170" height="110" viewBox="0 0 170 110">
+        <ellipse cx="85" cy="100" rx="75" ry="8" fill="#2a1f18" opacity="0.25"/>
+        <ellipse cx="85" cy="82" rx="72" ry="16" fill="none" stroke="#5cc4b0" stroke-width="2" opacity="0.4" stroke-dasharray="3 4"/>
+        <circle cx="20" cy="86" r="7" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="1.8"/>
+        <circle cx="45" cy="94" r="6" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="1.8"/>
+        <circle cx="75" cy="98" r="8" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2"/>
+        <circle cx="108" cy="96" r="6.5" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="1.8"/>
+        <circle cx="135" cy="90" r="7" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="1.8"/>
+        <circle cx="155" cy="80" r="5.5" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="1.6"/>
+      </svg>`,
+    sporePodCluster: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <defs>
+          <radialGradient id="healGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#8fd9b0" stop-opacity="0.6"/>
+            <stop offset="1" stop-color="#8fd9b0" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="70" cy="90" r="46" fill="url(#healGlow)" opacity="0.2"/>
+        <path d="M45,150 L45,110" stroke="#3a2c4a" stroke-width="6" stroke-linecap="round"/>
+        <ellipse cx="45" cy="100" rx="18" ry="24" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2.5"/>
+        <path d="M75,150 L75,105" stroke="#3a2c4a" stroke-width="7" stroke-linecap="round"/>
+        <ellipse cx="75" cy="88" rx="22" ry="30" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2.5"/>
+        <path d="M62,60 Q75,50 88,60 Q90,72 75,80 Q60,72 62,60 Z" fill="#c9a8f0" opacity="0.5"/>
+        <circle cx="72" cy="55" r="3" fill="#e8d8ff" opacity="0.9"/>
+        <circle cx="80" cy="48" r="2.2" fill="#e8d8ff" opacity="0.7"/>
+        <circle cx="65" cy="45" r="2" fill="#e8d8ff" opacity="0.6"/>
+        <path d="M105,150 L105,118" stroke="#3a2c4a" stroke-width="5" stroke-linecap="round"/>
+        <ellipse cx="105" cy="110" rx="14" ry="18" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2"/>
+      </svg>`,
+    canopyCap: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="220" height="170" viewBox="0 0 220 170">
+        <defs>
+          <radialGradient id="windGlow" cx="0.5" cy="0.55" r="0.5">
+            <stop offset="0" stop-color="#bfe3e3" stop-opacity="0.5"/>
+            <stop offset="1" stop-color="#bfe3e3" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="healGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#8fd9b0" stop-opacity="0.6"/>
+            <stop offset="1" stop-color="#8fd9b0" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="110" cy="90" r="90" fill="url(#windGlow)" opacity="0.2"/>
+        <rect x="98" y="90" width="24" height="60" fill="#3a2c4a" stroke="#2a1f18" stroke-width="2.5"/>
+        <path d="M10,90 Q10,20 110,15 Q210,20 210,90 Q160,102 110,98 Q60,102 10,90 Z" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="3.5"/>
+        <path d="M15,86 Q60,96 110,94 Q160,96 205,86" fill="none" stroke="#2a6a5a" stroke-width="1.5" opacity="0.6"/>
+        <path d="M110,20 L110,94 M45,35 L100,92 M175,35 L120,92 M20,80 L95,94 M200,80 L125,94" stroke="#2a6a5a" stroke-width="1.2" opacity="0.5"/>
+        <ellipse cx="110" cy="150" rx="60" ry="14" fill="url(#healGlow)" opacity="0.55"/>
+      </svg>`,
+    hangingTendril: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="60" height="160" viewBox="0 0 60 160">
+        <path d="M30,0 Q10,60 28,110 Q34,128 24,145" stroke="#3a6a5a" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <path d="M28,40 Q40,44 42,54" stroke="#3a6a5a" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M20,80 Q10,84 8,92" stroke="#3a6a5a" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <circle cx="24" cy="148" r="9" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="2.5"/>
+      </svg>`,
+    cavePearls: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="190" height="130" viewBox="0 0 190 130">
+        <ellipse cx="95" cy="90" rx="85" ry="35" fill="#3a2c4a" stroke="#2a1f18" stroke-width="3"/>
+        <ellipse cx="95" cy="86" rx="70" ry="26" fill="#4a3a5a" stroke="#2a1f18" stroke-width="2.5"/>
+        <circle cx="65" cy="88" r="12" fill="#e8e0ff" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="95" cy="96" r="9" fill="#d8c8ff" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="125" cy="86" r="14" fill="#e8e0ff" stroke="#2a1f18" stroke-width="2"/>
+        <circle cx="60" cy="83" r="4" fill="#fff" opacity="0.7"/>
+        <circle cx="120" cy="80" r="5" fill="#fff" opacity="0.7"/>
+      </svg>`,
+    fungalCrystalHybrid: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+        <defs>
+          <radialGradient id="caveGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#9b7fc4" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="#9b7fc4" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="70" cy="100" r="46" fill="url(#caveGlow)" opacity="0.3"/>
+        <rect x="60" y="115" width="10" height="30" rx="4" fill="#3a2c4a" stroke="#2a1f18" stroke-width="2"/>
+        <path d="M30,115 Q30,80 70,76 Q110,80 110,115 Q90,124 70,120 Q50,124 30,115 Z" fill="#5cc4b0" stroke="#a8f0e0" stroke-width="3"/>
+        <polygon points="70,30 78,70 90,80 68,82 55,72 62,70" fill="#7a5cc4" stroke="#c9a8f0" stroke-width="2.5"/>
+        <polygon points="88,40 96,66 108,74 90,74" fill="#9b7fc4" stroke="#e8d8ff" stroke-width="2"/>
+        <circle cx="76" cy="45" r="2.5" fill="#e8d8ff"/>
+      </svg>`,
+    driftingSporeMotes: `
+      <svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">
+        <defs>
+          <radialGradient id="caveGlow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0" stop-color="#9b7fc4" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="#9b7fc4" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="70" cy="70" r="60" fill="url(#caveGlow)" opacity="0.25"/>
+        <circle cx="45" cy="55" r="4" fill="#e8d8ff" opacity="0.9"/>
+        <circle cx="80" cy="40" r="3" fill="#d8fff2" opacity="0.8"/>
+        <circle cx="100" cy="75" r="4.5" fill="#e8d8ff" opacity="0.85"/>
+        <circle cx="60" cy="95" r="3.5" fill="#d8fff2" opacity="0.75"/>
+        <circle cx="95" cy="105" r="3" fill="#e8d8ff" opacity="0.7"/>
+        <circle cx="35" cy="85" r="2.5" fill="#d8fff2" opacity="0.65"/>
+        <path d="M45,55 Q55,48 80,40" stroke="#e8d8ff" stroke-width="1" fill="none" opacity="0.3" stroke-dasharray="2 3"/>
+        <path d="M100,75 Q80,90 60,95" stroke="#d8fff2" stroke-width="1" fill="none" opacity="0.3" stroke-dasharray="2 3"/>
+      </svg>`,
   };
 
   const biomeFoliageMeta = {
@@ -920,6 +1153,22 @@ const ForestAssets = (() => {
     glowingFungus: { width: 66, height: 61, groundFraction: 118 / 130 },
     crystalCluster: { width: 70, height: 70, groundFraction: 120 / 140 },
     stalagmite: { width: 55, height: 77, groundFraction: 130 / 140 },
+    // Hollow Deep expansion (see the matching SVGs above).
+    motherFungus: { width: 130, height: 156, groundFraction: 228 / 240 },
+    crackedGeodeChamber: { width: 141, height: 128, groundFraction: 190 / 200 },
+    rootCurtain: { width: 110, height: 143, groundFraction: 0.85 },
+    crystalFalls: { width: 100, height: 130, groundFraction: 0.97 },
+    stalactiteCeiling: { width: 55, height: 72, groundFraction: 88 / 130 },
+    crystalSpire: { width: 66, height: 99, groundFraction: 175 / 180 },
+    shatteredGeodeRubble: { width: 85, height: 53, groundFraction: 88 / 100 },
+    crystalArch: { width: 125, height: 78, groundFraction: 140 / 150 },
+    fairyRing: { width: 95, height: 62, groundFraction: 100 / 110 },
+    sporePodCluster: { width: 80, height: 91, groundFraction: 150 / 160 },
+    canopyCap: { width: 141, height: 109, groundFraction: 150 / 170 },
+    hangingTendril: { width: 38, height: 101, groundFraction: 148 / 160 },
+    cavePearls: { width: 101, height: 69, groundFraction: 125 / 130 },
+    fungalCrystalHybrid: { width: 78, height: 90, groundFraction: 145 / 160 },
+    driftingSporeMotes: { width: 70, height: 70, groundFraction: 0.5 },
   };
 
   const biomeFoliage = {};

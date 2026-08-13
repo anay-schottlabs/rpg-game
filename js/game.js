@@ -2394,12 +2394,28 @@ const OUTER_BIOMES = [
   {
     id: "hollowDeep", enemyKind: "crystalCrawler", groundColor: "#241c30",
     treeKey: null, treeDensityMul: 0, foliageDensityMul: 0.65,
-    pickFoliage: () => {
-      const r = RNG.random();
-      if (r < 0.45) return "glowingFungus";
-      if (r < 0.75) return "crystalCluster";
-      return "stalagmite";
-    },
+    // Weighted table, not a long if-chain — easier to re-tune with this
+    // many entries. The four Set Pieces (large, one-of-a-kind landmarks
+    // per the design brief — "one or two per chamber") get a low combined
+    // weight (8%) so they read as rare finds, not scattered like ordinary
+    // growth; everything else splits the rest.
+    pickFoliage: (() => {
+      const table = [
+        ["motherFungus", 0.02], ["crackedGeodeChamber", 0.02], ["rootCurtain", 0.02], ["crystalFalls", 0.02],
+        ["glowingFungus", 0.10], ["crystalCluster", 0.10], ["stalagmite", 0.08],
+        ["stalactiteCeiling", 0.06], ["crystalSpire", 0.06], ["shatteredGeodeRubble", 0.07], ["crystalArch", 0.05],
+        ["fairyRing", 0.06], ["sporePodCluster", 0.06], ["canopyCap", 0.05], ["hangingTendril", 0.07],
+        ["cavePearls", 0.06], ["fungalCrystalHybrid", 0.04], ["driftingSporeMotes", 0.06],
+      ];
+      return () => {
+        let r = RNG.random();
+        for (const [key, weight] of table) {
+          if (r < weight) return key;
+          r -= weight;
+        }
+        return table[table.length - 1][0];
+      };
+    })(),
   },
 ];
 const BIOME_SECTOR_SIZE = (Math.PI * 2) / OUTER_BIOMES.length;
