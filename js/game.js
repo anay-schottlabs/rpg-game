@@ -3,7 +3,7 @@
 const canvas = document.getElementById("game-canvas");
 const ctx = canvas.getContext("2d");
 const spellbookEl = document.getElementById("spellbook");
-const lobbyEl = document.getElementById("lobby"); // the campfire menu
+const lobbyEl = document.getElementById("lobby"); // start-of-session solo/host/join menu — not reopenable mid-game right now, see loop()'s F-key handling
 const campfirePromptEl = document.getElementById("campfire-prompt");
 const playerListEl = document.getElementById("player-list");
 const playerListItemsEl = document.getElementById("player-list-items");
@@ -25,7 +25,6 @@ const bossHealthBarEl = document.getElementById("boss-health-bar");
 const bossHealthFillEl = document.getElementById("boss-health-fill");
 const bossHealthSheenEl = document.getElementById("boss-health-sheen");
 const bossHealthNameEl = document.getElementById("boss-health-name");
-const lobbyReturnVillageBtn = document.getElementById("lobby-return-village-btn");
 const devConsoleEl = document.getElementById("dev-console");
 const devConsoleInputEl = document.getElementById("dev-console-input");
 const devConsoleSuggestionsEl = document.getElementById("dev-console-suggestions");
@@ -3612,11 +3611,14 @@ function loop(now) {
   const mp = window.Multiplayer;
   const isPeer = mp && mp.mode === "peer";
 
-  // Campfire menu: F opens it when in range, closes it when already open
-  // (from anywhere); Escape also closes it. Whichever campfire is relevant
-  // depends on the current area. Everything else F can interact with —
-  // village NPCs, the boss arena's rune — is checked the same way, and
-  // dialogue (if already open) takes priority over starting anything new.
+  // Campfire: F heals to full when in range. The old "gather" multiplayer
+  // menu trigger has been pulled from here (see the commented-out branch
+  // below) — the lobby/host/join UI itself is untouched and still reachable
+  // at the very start of a session, it's just not reopenable mid-game
+  // anymore until something new triggers it (a future NPC, most likely).
+  // Escape still closes the menu if it's ever open, and everything else F
+  // can interact with — village NPCs, the boss arena's rune — is checked
+  // the same way, with dialogue (if already open) taking priority.
   const activeCampfire = currentArea === "village" ? village.campfire : campfire;
   const menuOpenBefore = !lobbyEl.classList.contains("lobby-hidden");
   const distToCampfire = Math.hypot(player.x - activeCampfire.x, player.y - activeCampfire.y);
@@ -3636,9 +3638,8 @@ function loop(now) {
       lobbyEl.classList.add("lobby-hidden");
       Sound.menuClose();
     } else if (inCampfireRange) {
-      lobbyEl.classList.remove("lobby-hidden");
-      lobbyReturnVillageBtn.classList.toggle("hidden", currentArea !== "world");
-      Sound.menuOpen();
+      player.heal(player.maxHealth);
+      Sound.heal();
     } else if (nearbyNpc) {
       openDialogue(nearbyNpc);
     } else if (nearRune) {
@@ -3659,7 +3660,7 @@ function loop(now) {
     interactPromptEl.classList.add("hidden");
   } else if (inCampfireRange) {
     interactPromptEl.classList.remove("hidden");
-    interactPromptEl.innerHTML = "Press <strong>F</strong> to gather at the campfire";
+    interactPromptEl.innerHTML = "Press <strong>F</strong> to rest and heal";
   } else if (nearbyNpc) {
     interactPromptEl.classList.remove("hidden");
     interactPromptEl.innerHTML = `Press <strong>F</strong> to talk to the ${nearbyNpc.def.name}`;
