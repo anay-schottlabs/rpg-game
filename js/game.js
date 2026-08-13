@@ -373,11 +373,35 @@ const CAMPFIRE_INTERACT_RADIUS = 130; // how close the player must be to open th
 // numerically overlap — every system that cares which area is active reads
 // `currentArea` rather than relying on position alone.
 const VILLAGE_CENTER = { x: 100000, y: 100000 };
-// Small and fully enclosed for now — a thick, gapless ring of trees sits
-// right at this radius, and clampToWorld()'s hard clamp (below) is the
-// actual wall; the trees are just what that wall looks like. No gate, no
-// way out yet — more of the village opens up feature by feature.
+// The original clearing — a thick, gapless ring of trees sits right at
+// this radius, and is (along with the corridor/arena shapes below) what
+// isPointInVillageBounds() treats as walkable; clampToWorld()'s fallback
+// radius clamp only ever kicks in if that's somehow not already true.
 const VILLAGE_RADIUS = 340;
+
+// The path east out of the original clearing, opened once the dead-tree
+// cluster blocking it (see generateVillage()'s pathBreakTrees) is broken —
+// leads to a second, much bigger clearing for the arena. Modeled as three
+// plain shapes (circle, rectangle, circle) rather than one clamp radius,
+// since the walkable area is no longer a single circle once this opens.
+const VILLAGE_PATH_HALF_WIDTH = 90;
+const VILLAGE_PATH_LENGTH = 640;
+const VILLAGE_PATH_X0 = VILLAGE_CENTER.x + VILLAGE_RADIUS;
+const VILLAGE_PATH_X1 = VILLAGE_PATH_X0 + VILLAGE_PATH_LENGTH;
+const VILLAGE_ARENA_RADIUS = 950; // "a big clearing" — nearly 3x the original
+const VILLAGE_ARENA_CENTER = { x: VILLAGE_PATH_X1 + VILLAGE_ARENA_RADIUS, y: VILLAGE_CENTER.y };
+
+// True for any point inside the original clearing, or — once
+// village.pathOpen is set (see generateVillage()/resolveWeaponHit()) —
+// the corridor or the arena clearing too. The sole test both
+// clampToWorld() and moveWithCollision() use to decide what counts as
+// "still inside the village" now that it's not just one circle.
+function isPointInVillageBounds(x, y) {
+  if (Math.hypot(x - VILLAGE_CENTER.x, y - VILLAGE_CENTER.y) <= VILLAGE_RADIUS) return true;
+  if (!village || !village.pathOpen) return false;
+  if (x >= VILLAGE_PATH_X0 && x <= VILLAGE_PATH_X1 && Math.abs(y - VILLAGE_CENTER.y) <= VILLAGE_PATH_HALF_WIDTH) return true;
+  return Math.hypot(x - VILLAGE_ARENA_CENTER.x, y - VILLAGE_ARENA_CENTER.y) <= VILLAGE_ARENA_RADIUS;
+}
 
 // Known v1 simplification (same spirit as the golems being local-only): this
 // is the LOCAL player's area. simulatePlayerMovement()/clampToWorld() are
@@ -1023,26 +1047,41 @@ const CAST_SPEED_MULTIPLIER = 0.12; // drastic slowdown while channeling a spell
 // Axis-separated collision against water and spell-created obstacles: try
 // each axis independently so moving into one at an angle slides along it
 // instead of stopping dead, but crossing it is never possible. Shared by
-// the per-frame movement below and Gust Step's instant displacement.
+// the per-frame movement below and Gust Step's instant displacement. Also
+// where the village's own boundary (see isPointInVillageBounds()) is
+// enforced — it isn't a single clamp radius once the path/arena are open,
+// so it needs the same per-axis "try it, keep it only if still legal" shape
+// water/obstacles already use, rather than clampToWorld()'s simpler
+// after-the-fact snap-back.
 function moveWithCollision(state, dx, dy, dist) {
   const newX = state.x + dx * dist;
   const newY = state.y + dy * dist;
-  if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y)) state.x = newX;
-  if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY)) state.y = newY;
+  const villageBlocked = (x, y) => currentArea === "village" && !isPointInVillageBounds(x, y);
+  if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y) && !villageBlocked(newX, state.y)) state.x = newX;
+  if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY) && !villageBlocked(state.x, newY)) state.y = newY;
 }
 
 function clampToWorld(state) {
-  // Same shape as the open world's own boundary, just around whichever
-  // area's own center/radius is active — the village is a much smaller
-  // circle, and only local-only state (the local player) ever needs this,
-  // never remote players/host-sim, which only ever run in the open world.
-  const center = currentArea === "village" ? VILLAGE_CENTER : WORLD_CENTER;
-  const maxRadius = currentArea === "village" ? VILLAGE_RADIUS : PLAYER_MAX_RADIUS;
-  const dist = Math.hypot(state.x - center.x, state.y - center.y);
-  if (dist > maxRadius) {
-    const scale = maxRadius / dist;
-    state.x = center.x + (state.x - center.x) * scale;
-    state.y = center.y + (state.y - center.y) * scale;
+  if (currentArea === "village") {
+    // moveWithCollision() above already keeps the player inside
+    // isPointInVillageBounds() on every step, so this is only a safety net
+    // (e.g. Gust Step's instant displacement bypasses per-axis collision)
+    // — snap back toward the original clearing, same as before the
+    // path/arena existed.
+    if (isPointInVillageBounds(state.x, state.y)) return;
+    const dist = Math.hypot(state.x - VILLAGE_CENTER.x, state.y - VILLAGE_CENTER.y);
+    const scale = VILLAGE_RADIUS / dist;
+    state.x = VILLAGE_CENTER.x + (state.x - VILLAGE_CENTER.x) * scale;
+    state.y = VILLAGE_CENTER.y + (state.y - VILLAGE_CENTER.y) * scale;
+    return;
+  }
+  // Same shape as before — the open world's boundary is still just one
+  // circle.
+  const dist = Math.hypot(state.x - WORLD_CENTER.x, state.y - WORLD_CENTER.y);
+  if (dist > PLAYER_MAX_RADIUS) {
+    const scale = PLAYER_MAX_RADIUS / dist;
+    state.x = WORLD_CENTER.x + (state.x - WORLD_CENTER.x) * scale;
+    state.y = WORLD_CENTER.y + (state.y - WORLD_CENTER.y) * scale;
   }
 }
 
@@ -1203,7 +1242,7 @@ const WEAPON_SWING_FORWARD = 1.1; // radians swept forward during the strike
 // blade happens to overlap something, so a swing can't multi-hit one enemy
 // just by lingering nearby.
 const WEAPON_DAMAGE = 18;
-const WEAPON_RANGE = 78;
+const WEAPON_RANGE = 85;
 const WEAPON_HIT_ARC = Math.PI * 0.8; // total cone width in front of the player
 
 function resolveWeaponHit() {
@@ -1212,15 +1251,17 @@ function resolveWeaponHit() {
   player.hitThisSwing = true;
 
   const facingAngle = Math.atan2(player.facingY, player.facingX);
-  for (const enemy of enemies) {
-    if (enemy.state === "dead") continue;
-    const dx = enemy.x - player.x, dy = enemy.y - player.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > WEAPON_RANGE) continue;
+  const inSwingArc = (x, y) => {
+    const dx = x - player.x, dy = y - player.y;
+    if (Math.hypot(dx, dy) > WEAPON_RANGE) return false;
     let angleDiff = Math.abs(Math.atan2(dy, dx) - facingAngle);
     if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
-    if (angleDiff > WEAPON_HIT_ARC / 2) continue;
+    return angleDiff <= WEAPON_HIT_ARC / 2;
+  };
 
+  for (const enemy of enemies) {
+    if (enemy.state === "dead") continue;
+    if (!inSwingArc(enemy.x, enemy.y)) continue;
     enemy.health -= WEAPON_DAMAGE;
     if (enemy.health <= 0) {
       killEnemy(enemy);
@@ -1228,6 +1269,24 @@ function resolveWeaponHit() {
     } else {
       Sound.enemyTakeDamage();
     }
+  }
+
+  // Dead trees blocking the path east out of the village (see
+  // generateVillage()'s pathBreakTrees) — same shatter/chain-adjacent
+  // feedback Earth Breaker used to give its own gate-tree equivalent,
+  // just weapon-triggered now instead of spell-triggered.
+  if (currentArea === "village" && village && !village.pathOpen) {
+    for (const tree of village.pathBreakTrees) {
+      if (tree.destroyed || !inSwingArc(tree.x, tree.y)) continue;
+      tree.destroyed = true;
+      spawnEffect(tree.x, tree.y, "earthImpact", 0.45, (tree.scale || 1) * 1.3);
+      Sound.earthShatter(0);
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        if (obs.kind === "villagePathBlock" && Math.hypot(obs.x - tree.x, obs.y - tree.y) < 5) obstacles.splice(i, 1);
+      }
+    }
+    if (village.pathBreakTrees.every((t) => t.destroyed)) village.pathOpen = true;
   }
 }
 
@@ -2114,8 +2173,8 @@ const BIOME_SECTOR_SIZE = (Math.PI * 2) / OUTER_BIOMES.length;
 // Baseline biome tree/foliage density (per million px²) that each biome
 // scales via its own *DensityMul, and how far a biome's content can bleed
 // into a neighboring sector before fading to nothing.
-const BASE_BIOME_TREE_DENSITY = 9;
-const BASE_BIOME_FOLIAGE_DENSITY = 13;
+const BASE_BIOME_TREE_DENSITY = 7.5;
+const BASE_BIOME_FOLIAGE_DENSITY = 11;
 const BIOME_ANGLE_BLEND = BIOME_SECTOR_SIZE * 0.22;
 
 // Extra tree/foliage layer that fades in toward the world's true edge —
@@ -2666,6 +2725,7 @@ const NPC_DEFS = [
       "You're awake. Good — the Sanctuary doesn't see many new faces.",
       "Long ago this whole forest was one and the same. Then something changed, and it split into six wild regions, each stranger than the last.",
       "Here — take this. Everyone who leaves this clearing carries something. Right arrow swings it, once you've got the feel for standing still long enough to aim.",
+      "See that deadwood past the treeline east of here? Old, dry, brittle — a solid swing will clear it right out of your way. Living wood won't budge the same.",
       "Rest by the fire when you need to. The Sanctuary's yours to explore.",
     ],
     onComplete: () => grantWeapon(),
@@ -2696,6 +2756,21 @@ const VILLAGE_TREE_RING_ROWS = [
   { r: 465, spacing: 34 },
 ];
 
+// The arena clearing's own boundary ring — same shape, scaled up for its
+// much bigger radius (the count-from-circumference formula in
+// scatterTreeRing() below handles that automatically, no separate tuning).
+const VILLAGE_ARENA_RING_ROWS = [
+  { r: VILLAGE_ARENA_RADIUS + 15, spacing: 34 },
+  { r: VILLAGE_ARENA_RADIUS + 70, spacing: 34 },
+  { r: VILLAGE_ARENA_RADIUS + 125, spacing: 34 },
+];
+
+// Hedge-like walls flanking the corridor, two rows per side.
+const VILLAGE_PATH_WALL_ROWS = [
+  { offset: VILLAGE_PATH_HALF_WIDTH + 25, spacing: 34 },
+  { offset: VILLAGE_PATH_HALF_WIDTH + 80, spacing: 34 },
+];
+
 let village = null;
 
 // NPC source art (ForestAssets.npcs, ~92x131px for the trainer sprite) is
@@ -2704,6 +2779,29 @@ let village = null;
 // rather than by shrinking the source art, since npcMeta's width/height
 // also double as its groundFraction anchor math in drawGroundSprite().
 const NPC_DISPLAY_SCALE = 0.65;
+
+// Places one ring of trees (see VILLAGE_TREE_RING_ROWS's comment on why
+// even-spacing-plus-jitter beats overlap-rejection here), optionally
+// leaving a gap of `gapWidth` world px centered on `gapAngle` — used to
+// carve the corridor's opening out of both the village's own ring and the
+// arena's.
+function scatterTreeRing(rng, decor, treeTypes, center, rows, gapAngle, gapWidth) {
+  for (const row of rows) {
+    const count = Math.round((2 * Math.PI * row.r) / row.spacing);
+    const gapHalfAngle = gapAngle === null ? 0 : Math.atan2(gapWidth / 2, row.r);
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (rng() - 0.5) * (Math.PI / count);
+      if (gapAngle !== null) {
+        const diff = Math.abs(((angle - gapAngle + Math.PI) % (Math.PI * 2)) - Math.PI);
+        if (diff < gapHalfAngle) continue;
+      }
+      const r = row.r + (rng() - 0.5) * 20;
+      const x = center.x + Math.cos(angle) * r;
+      const y = center.y + Math.sin(angle) * r;
+      decor.push({ category: "tree", x, y, type: treeTypes[Math.floor(rng() * treeTypes.length)], scale: 0.8 + rng() * 0.5 });
+    }
+  }
+}
 
 function generateVillage() {
   const rng = createVillageRng(20260812); // fixed seed — identical layout every time
@@ -2724,26 +2822,60 @@ function generateVillage() {
   }
 
   place("hubFeatures", "noticeBoard", 110, -70);
+  decor.push({ category: "hubFeatures", kind: "arenaRing", x: VILLAGE_ARENA_CENTER.x, y: VILLAGE_ARENA_CENTER.y, scale: 1.8, flip: false });
 
   const treeTypes = ["common", "birch", "pine", "willow", "elder"];
-  for (const row of VILLAGE_TREE_RING_ROWS) {
-    const count = Math.round((2 * Math.PI * row.r) / row.spacing);
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2 + (rng() - 0.5) * (Math.PI / count);
-      const r = row.r + (rng() - 0.5) * 20;
-      const x = VILLAGE_CENTER.x + Math.cos(angle) * r;
-      const y = VILLAGE_CENTER.y + Math.sin(angle) * r;
-      decor.push({ category: "tree", x, y, type: treeTypes[Math.floor(rng() * treeTypes.length)], scale: 0.8 + rng() * 0.5 });
+  const gapWidth = VILLAGE_PATH_HALF_WIDTH * 2 + 40; // a little wider than the corridor itself so trees don't crowd its mouth
+
+  // The village's own ring, gapped where the corridor leaves it (due east)...
+  scatterTreeRing(rng, decor, treeTypes, VILLAGE_CENTER, VILLAGE_TREE_RING_ROWS, 0, gapWidth);
+  // ...and the arena's ring, gapped on the side facing back down the corridor.
+  scatterTreeRing(rng, decor, treeTypes, VILLAGE_ARENA_CENTER, VILLAGE_ARENA_RING_ROWS, Math.PI, gapWidth);
+
+  // Hedges along both sides of the corridor connecting them.
+  for (const wallRow of VILLAGE_PATH_WALL_ROWS) {
+    for (const side of [-1, 1]) {
+      const count = Math.round(VILLAGE_PATH_LENGTH / wallRow.spacing);
+      for (let i = 0; i < count; i++) {
+        const x = VILLAGE_PATH_X0 + (i / count) * VILLAGE_PATH_LENGTH + (rng() - 0.5) * 20;
+        const y = VILLAGE_CENTER.y + side * wallRow.offset + (rng() - 0.5) * 20;
+        decor.push({ category: "tree", x, y, type: treeTypes[Math.floor(rng() * treeTypes.length)], scale: 0.8 + rng() * 0.5 });
+      }
     }
+  }
+
+  // The dead-tree cluster blocking the corridor's mouth until the player
+  // breaks it open with their weapon (see resolveWeaponHit()) — same
+  // shatter mechanic Earth Breaker used for the old gate, just
+  // weapon-triggered. Once every tree here is destroyed, village.pathOpen
+  // flips true and isPointInVillageBounds() opens the corridor and arena up.
+  //
+  // Positions are deliberately fixed (not scattered by rng()) — each
+  // obstacle's own blocking radius keeps the player from approaching past
+  // roughly VILLAGE_PATH_X0 - 40, so this specific spread is what keeps
+  // every tree within WEAPON_RANGE from that one legal standing spot right
+  // in front of the cluster.
+  const pathBreakTrees = [];
+  for (const yOffset of [-50, 0, 50]) {
+    const x = VILLAGE_PATH_X0 + 10;
+    const y = VILLAGE_CENTER.y + yOffset;
+    const tree = { x, y, type: "dead", scale: 1.05 + rng() * 0.15, destroyed: false };
+    pathBreakTrees.push(tree);
+    obstacles.push({ type: "circle", kind: "villagePathBlock", x, y, radius: 50, expiresAt: Infinity });
   }
 
   for (const item of decor) {
     renderGrid.insert(item.x, item.y, { y: item.y, kind: item.category, item });
   }
+  for (const tree of pathBreakTrees) {
+    renderGrid.insert(tree.x, tree.y, { y: tree.y, kind: "pathBreakTree", item: tree });
+  }
 
   village = {
     npcs,
     decor,
+    pathBreakTrees,
+    pathOpen: false,
     campfire: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y, scale: 1, flip: false },
     renderGrid,
     spawnPoint: { x: VILLAGE_CENTER.x, y: VILLAGE_CENTER.y + 90 },
@@ -2761,6 +2893,11 @@ function drawNpc(item, camera) {
 
 function drawHubFeature(item, camera) {
   drawGroundSprite(ForestAssets.hubFeatures[item.kind], item, camera);
+}
+
+function drawPathBreakTree(item, camera) {
+  if (item.destroyed) return; // shattered by the player's weapon
+  drawTree(item, camera);
 }
 
 function drawVillage(camera, mp) {
@@ -2783,6 +2920,7 @@ function drawVillage(camera, mp) {
   for (const d of drawables) {
     switch (d.kind) {
       case "tree": drawTree(d.item, camera); break;
+      case "pathBreakTree": drawPathBreakTree(d.item, camera); break;
       case "hubFeatures": drawHubFeature(d.item, camera); break;
       case "npc": drawNpc(d.item, camera); break;
       case "campfire": drawCampfire(d.item, camera); break;
@@ -3110,8 +3248,11 @@ let campfire, player;
 const RENDER_GRID_CELL_SIZE = 600;
 // Extra margin (world px) added around the strict viewport when querying
 // renderGrid, so a wide ground sprite anchored just off-screen still gets
-// drawn before it'd visibly pop in.
-const RENDER_VIEW_MARGIN = 400;
+// drawn before it'd visibly pop in. Kept generous (well past what a sprite
+// itself would ever need) so trees are always rendered a good distance
+// past the visible edge in every direction — the forest reads as endless
+// rather than visibly stopping right where the screen does.
+const RENDER_VIEW_MARGIN = 650;
 
 function insertIntoRenderGrid(kind, list) {
   for (const item of list) renderGrid.insert(item.x, item.y, { y: item.y, kind, item });
@@ -3221,8 +3362,8 @@ function ambientFootprintRadius(item) {
 // once biomes made everything else denser too. overlapAllowance values are
 // likewise raised across the board (>=1 forces a real gap between items,
 // not just "centers don't fully coincide") so nothing visually crowds.
-const GROVE_TREE_DENSITY = 9;
-const GROVE_FOLIAGE_DENSITY = 13;
+const GROVE_TREE_DENSITY = 7.5;
+const GROVE_FOLIAGE_DENSITY = 11;
 const GROVE_FLOWER_CLUSTER_DENSITY = 0.05; // clusters/million px², a few items each
 const GROVE_MUSHROOM_CLUSTER_DENSITY = 0.09;
 const GROVE_MUSHROOM_TOPUP_DENSITY = 1.4;
