@@ -9,6 +9,8 @@ const playerListEl = document.getElementById("player-list");
 const playerListItemsEl = document.getElementById("player-list-items");
 const healthBarFillEl = document.getElementById("health-bar-fill");
 const healthBarSheenEl = document.getElementById("health-bar-sheen");
+const damageVignetteEl = document.getElementById("damage-vignette");
+const deathOverlayEl = document.getElementById("death-overlay");
 const castingRingEl = document.getElementById("casting-ring");
 const castPipEls = {
   up: document.getElementById("cast-pip-up"),
@@ -1447,6 +1449,7 @@ class Player {
 
   takeDamage(amount) {
     this.health = Math.max(0, this.health - amount);
+    if (this.health <= 0) startPlayerDeath();
   }
 
   heal(amount) {
@@ -1533,7 +1536,7 @@ const ENEMY_TYPES = {
   // instance itself, not here — see spawnCrystalGolem() — since a boss is a
   // one-off, not a species with many interchangeable instances.
   crystalGolem: {
-    displayName: "Crystal Golem", biomeId: "hollowDeep", family: "golem",
+    displayName: "Crystal Golem", biomeId: "hollowDeep", family: "golem", isBoss: true,
     maxHealth: 600, aggroRadius: 620, leashRadius: 620, attackRange: 90,
     attackWindup: 0.55, attackCooldown: 1.8, attackDamage: 16, speed: 85,
     respawnMs: Infinity, scale: 0.62, rig: ForestAssets.enemyRigs.crystalGolem,
@@ -1754,8 +1757,11 @@ function drawEnemyShadow(enemy, type, flip, camera) {
 
 // Health bar over the creature while below full — a quick read on how close
 // it is to going down without needing a persistent HUD element per enemy.
+// Skipped for bosses (see ENEMY_TYPES' isBoss flag) — they get the shared
+// #boss-health-bar HUD element instead (see updateBossHealthBarUI()), and
+// showing both is redundant right on top of the boss's own body.
 function drawEnemyHealthBar(enemy, type, flip, camera) {
-  if (enemy.health >= type.maxHealth) return;
+  if (type.isBoss || enemy.health >= type.maxHealth) return;
   const anchor = type.rig.groundAnchor;
   const barWorld = enemyLocalToWorld({ x: anchor.x, y: anchor.y - type.rig.viewHeight * 0.85 }, enemy, type, flip);
   const bx = barWorld.x - camera.x;
@@ -3588,6 +3594,70 @@ function generateWorld() {
   window.player = player;
 }
 
+// --- Player death --------------------------------------------------------
+
+// A short, two-phase transition (zoom in + screen tint out, then back)
+// rather than an instant reset — covers the teleport back to the campfire
+// so it never reads as a jarring pop, and gives the moment some weight.
+// Movement/enemies/interactions all pause for its duration (folded into
+// loop()'s uiBlocking, same as a menu or dialogue).
+const DEATH_FADEOUT_DURATION = 0.9;
+const DEATH_FADEIN_DURATION = 0.9;
+const DEATH_ZOOM_TARGET = 2.1;
+
+let deathState = null; // { phase: "fadeOut" | "fadeIn", t } | null
+
+function startPlayerDeath() {
+  if (deathState) return;
+  deathState = { phase: "fadeOut", t: 0 };
+}
+
+// A short, one-off line rather than the Elder's full multi-line intro —
+// reuses openDialogue()'s existing panel/advance/close machinery with a
+// throwaway "npc" shaped just enough like the real ones (def.kind/name/
+// lines) for it to work, rather than duplicating that plumbing.
+function openPostDeathDialogue() {
+  openDialogue({
+    def: {
+      kind: "trainer",
+      name: "Elder",
+      lines: [
+        "Back on your feet. Everyone who wanders out there goes down sooner or later — what matters is you got back up.",
+        "Rest by the fire if you need to. The Sanctuary isn't going anywhere.",
+      ],
+    },
+  });
+}
+
+// Advances the transition and, right at the midpoint (fadeOut complete,
+// screen fully dark), performs the actual teleport/heal — hidden behind
+// the overlay so it never reads as a visible pop.
+function updateDeathState(dt) {
+  if (!deathState) return;
+  deathState.t += dt;
+  if (deathState.phase === "fadeOut" && deathState.t >= DEATH_FADEOUT_DURATION) {
+    currentArea = "village";
+    player.x = village.spawnPoint.x;
+    player.y = village.spawnPoint.y;
+    player.dashTimeLeft = 0;
+    player.health = player.maxHealth;
+    deathState = { phase: "fadeIn", t: 0 };
+    openPostDeathDialogue();
+  } else if (deathState.phase === "fadeIn" && deathState.t >= DEATH_FADEIN_DURATION) {
+    deathState = null;
+  }
+}
+
+function updateDeathOverlay() {
+  if (!deathState) {
+    deathOverlayEl.style.opacity = 0;
+    return;
+  }
+  const duration = deathState.phase === "fadeOut" ? DEATH_FADEOUT_DURATION : DEATH_FADEIN_DURATION;
+  const t = Math.min(1, deathState.t / duration);
+  deathOverlayEl.style.opacity = deathState.phase === "fadeOut" ? t * 0.92 : (1 - t) * 0.92;
+}
+
 // --- Camera ------------------------------------------------------------------
 
 const camera = { x: 0, y: 0, zoom: 1 };
@@ -3715,11 +3785,16 @@ let qWasPressed = false;
 
 const HEALTH_BAR_TRACK_WIDTH = 158; // matches the design's bar geometry (x=34..192)
 
+const LOW_HEALTH_VIGNETTE_THRESHOLD = 0.45; // stays invisible above this ratio, then ramps in — a warning, not just a death cue
+
 function updateHealthBar() {
   const ratio = Math.max(0, Math.min(1, player.health / player.maxHealth));
   const width = HEALTH_BAR_TRACK_WIDTH * ratio;
   healthBarFillEl.setAttribute("width", width);
   healthBarSheenEl.setAttribute("width", width);
+
+  const danger = Math.max(0, 1 - ratio / LOW_HEALTH_VIGNETTE_THRESHOLD);
+  damageVignetteEl.style.opacity = danger;
 }
 
 // Rebuilds the player-list panel's contents. Only called while it's
@@ -3782,6 +3857,13 @@ function loop(now) {
   const mp = window.Multiplayer;
   const isPeer = mp && mp.mode === "peer";
 
+  // Advanced unconditionally (not gated by uiBlocking below — it's what
+  // *sets* uiBlocking while active) — see "--- Player death ---" above.
+  // Runs before the campfire/NPC checks so, if this is the frame the
+  // teleport happens on, those immediately reflect the player's new
+  // position rather than lagging a frame behind.
+  updateDeathState(dt);
+
   // Campfire: F heals to full when in range. The old "gather" multiplayer
   // menu trigger has been pulled from here (see the commented-out branch
   // below) — the lobby/host/join UI itself is untouched and still reachable
@@ -3805,6 +3887,10 @@ function loop(now) {
   if (fJustPressed) {
     if (activeDialogue) {
       advanceDialogue();
+    } else if (deathState) {
+      // Fading out or in — nothing to interact with yet; the post-death
+      // dialogue (if any) is handled by the activeDialogue branch above
+      // once updateDeathState() opens it.
     } else if (menuOpenBefore) {
       lobbyEl.classList.add("lobby-hidden");
       Sound.menuClose();
@@ -3825,7 +3911,7 @@ function loop(now) {
   }
 
   const menuOpen = !lobbyEl.classList.contains("lobby-hidden");
-  const uiBlocking = menuOpen || !!activeDialogue || devConsoleOpen;
+  const uiBlocking = menuOpen || !!activeDialogue || devConsoleOpen || !!deathState;
 
   if (uiBlocking) {
     interactPromptEl.classList.add("hidden");
@@ -3886,11 +3972,14 @@ function loop(now) {
   updateCamera();
   updateHealthBar();
   updateBossHealthBarUI();
+  updateDeathOverlay();
 
   // Zoom is purely local UI feedback — it reads the raw key state directly
   // rather than the (possibly host-delayed) simulated `isCasting`, so it
-  // stays instant regardless of network mode.
-  const targetZoom = keys.shift ? CAST_ZOOM : 1;
+  // stays instant regardless of network mode. The death transition
+  // overrides it outright while active (zooming in, then back out) —
+  // see "--- Player death ---" above.
+  const targetZoom = deathState ? (deathState.phase === "fadeOut" ? DEATH_ZOOM_TARGET : 1) : keys.shift ? CAST_ZOOM : 1;
   camera.zoom += (targetZoom - camera.zoom) * Math.min(1, dt * ZOOM_APPROACH_RATE);
 
   // Spellbook: Q toggles it open/closed (press again to close), at any time,

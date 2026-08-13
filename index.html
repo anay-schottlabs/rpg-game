@@ -11,6 +11,12 @@
   <div id="game-container">
     <canvas id="game-canvas"></canvas>
 
+    <!-- Low-health warning (js/game.js's updateHealthBar()) and the death
+         transition (updateDeathState()/updateDeathOverlay()) — both pure
+         visual overlays, no markup inside either. -->
+    <div id="damage-vignette"></div>
+    <div id="death-overlay"></div>
+
     <svg id="health-bar" width="200" height="40" viewBox="0 0 200 40">
       <rect x="2" y="2" width="196" height="36" rx="8" fill="#e8dcc0" stroke="#2a1f18" stroke-width="3"/>
       <rect x="34" y="10" width="158" height="20" rx="4" fill="#3a2c1e" opacity="0.25"/>

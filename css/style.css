@@ -30,6 +30,35 @@ html, body {
   display: none !important;
 }
 
+/* Low-health vignette — a soft red glow around the screen edges that
+   intensifies as health drops below ~45%, well before actually dying.
+   Opacity is set from JS (updateHealthBar()); the CSS transition just
+   smooths out the per-frame steps. */
+#damage-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(166, 20, 20, 0) 55%, rgba(140, 10, 10, 0.55) 100%);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  z-index: 14;
+}
+
+/* Death transition — a dark wash the player fades through while the camera
+   zooms in on them, covering the teleport back to the campfire. Opacity is
+   driven frame-by-frame from JS (updateDeathOverlay()), not a CSS
+   transition, so it stays in lockstep with the camera zoom's own easing.
+   z-index sits below #dialogue-panel/#lobby so the post-death dialogue
+   stays readable as the screen fades back in. */
+#death-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(60, 8, 8, 0.75) 0%, rgba(10, 2, 2, 0.95) 100%);
+  opacity: 0;
+  z-index: 18;
+}
+
 /* Casting ring — appears around the player (who's always screen-centered)
    while E is held. */
 #casting-ring {
