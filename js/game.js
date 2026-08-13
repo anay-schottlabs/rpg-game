@@ -27,6 +27,8 @@ const bossHealthBarEl = document.getElementById("boss-health-bar");
 const bossHealthFillEl = document.getElementById("boss-health-fill");
 const bossHealthSheenEl = document.getElementById("boss-health-sheen");
 const bossHealthNameEl = document.getElementById("boss-health-name");
+const bossHealthWingLeftEl = document.getElementById("boss-health-wing-left");
+const bossHealthWingRightEl = document.getElementById("boss-health-wing-right");
 const devConsoleEl = document.getElementById("dev-console");
 const devConsoleInputEl = document.getElementById("dev-console-input");
 const devConsoleSuggestionsEl = document.getElementById("dev-console-suggestions");
@@ -1092,8 +1094,8 @@ function moveWithCollision(state, dx, dy, dist) {
   const newX = state.x + dx * dist;
   const newY = state.y + dy * dist;
   const villageBlocked = (x, y) => currentArea === "village" && !isPointInVillageBounds(x, y);
-  if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y) && !villageBlocked(newX, state.y)) state.x = newX;
-  if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY) && !villageBlocked(state.x, newY)) state.y = newY;
+  if (!isPointInWater(newX, state.y) && !isPointBlocked(newX, state.y) && !villageBlocked(newX, state.y) && !isBlockedByArenaBarrier(newX, state.y)) state.x = newX;
+  if (!isPointInWater(state.x, newY) && !isPointBlocked(state.x, newY) && !villageBlocked(state.x, newY) && !isBlockedByArenaBarrier(state.x, newY)) state.y = newY;
 }
 
 function clampToWorld(state) {
@@ -1754,7 +1756,7 @@ function updateEnemy(enemy, dt) {
       const newX = enemy.x + dx * type.speed * dt;
       const newY = enemy.y + dy * type.speed * dt;
       const blockedByWater = !type.ignoresWater && isPointInWater(newX, newY);
-      if (!blockedByWater && !isPointBlocked(newX, newY)) {
+      if (!blockedByWater && !isPointBlocked(newX, newY) && !isBlockedByArenaBarrier(newX, newY)) {
         enemy.x = newX;
         enemy.y = newY;
       }
@@ -3193,6 +3195,9 @@ function drawVillage(camera, mp) {
   // while the player's off in the world, since village/world coordinates
   // never overlap — see VILLAGE_CENTER's comment), so no area filter needed.
   for (const enemy of enemies) drawables.push({ y: enemy.y, kind: "enemy", item: enemy });
+  if (villageArenaState && villageArenaState.barrierActive) {
+    for (const rock of villageArenaState.barrierRocks) drawables.push({ y: rock.y, kind: "rock", item: rock });
+  }
   if (mp) {
     for (const remote of mp.getRemotePlayers()) drawables.push({ y: remote.y, kind: "remote", item: remote });
   }
@@ -3375,12 +3380,16 @@ function spawnVillageArena() {
     "Heh, fresh meat. We spar in pairs here — keeps things honest.",
     "Give us a second to warm up in the ring, then come find us.",
   ];
+  trainees[0].postFightLines = ["Not bad. Not bad at all.", "Go rest up — the Chief's probably wondering when you'll show."];
+  trainees[0].retryLines = ["Back already? That fall didn't stick, huh.", "Ring's right there whenever you want to try us again."];
   trainees[1].dialogueKind = "traineeRed";
   trainees[1].dialogueName = "Trainee — Red Sash";
   trainees[1].preFightLines = [
     "Don't let the Blue Sash fool you soft — we don't go easy just because you're new.",
     "Meet us in the ring when you're ready.",
   ];
+  trainees[1].postFightLines = ["Hmph. Fine. You've earned the right to bother the Chief.", "Come back and spar again whenever you like."];
+  trainees[1].retryLines = ["Hit the ground, did you? Happens.", "Come find us when you want to go again."];
 
   const chiefEnemy = makeEnemy("chief", center.x + ARENA_CHIEF_HOME_OFFSET.x, center.y + ARENA_CHIEF_HOME_OFFSET.y);
   chiefEnemy.dialogueKind = "chief";
@@ -3389,14 +3398,28 @@ function spawnVillageArena() {
     "So you got past my Trainees. Good. Now let's see what that's worth.",
     "Give me a moment to get into the ring — then come find me.",
   ];
+  chiefEnemy.postFightLines = [
+    "...Ha. Hah! Alright — that's a fight, that is.",
+    "You've earned this. Ember Bolt — mine to give, yours to keep. Use it well.",
+  ];
+  chiefEnemy.retryLines = [
+    "Back on your feet already? Good sign.",
+    "Come find me in the ring when you're ready to go again.",
+  ];
 
   // Resume from wherever progress left off (see PROGRESS_STORAGE_KEY)
-  // rather than always starting fresh at "dormant".
+  // rather than always starting fresh at "dormant" — both already home,
+  // standing as friendly NPCs (see updateVillageArena()'s revive step)
+  // rather than mid-walk, since there's no walk-back animation to replay
+  // across a reload.
   if (progress.chiefDefeated) {
-    trainees[0].state = trainees[1].state = chiefEnemy.state = "dead";
-  } else if (progress.sparringDefeated) {
-    trainees[0].state = trainees[1].state = "dead";
+    for (const t of trainees) { t.state = "idle"; t.inert = true; t.hasBeenDefeated = true; }
+    chiefEnemy.state = "idle";
     chiefEnemy.inert = true;
+    chiefEnemy.hasBeenDefeated = true;
+  } else if (progress.sparringDefeated) {
+    for (const t of trainees) { t.state = "idle"; t.inert = true; t.hasBeenDefeated = true; }
+    chiefEnemy.inert = true; // still pre-fight — dormant equivalent
   } else {
     trainees[0].inert = trainees[1].inert = chiefEnemy.inert = true;
   }
@@ -3405,60 +3428,92 @@ function spawnVillageArena() {
 
   villageArenaState = {
     center,
-    phase: progress.chiefDefeated ? "defeated" : progress.sparringDefeated ? "sparringWon" : "dormant",
-    barrierObstacles: [],
+    phase: progress.chiefDefeated ? "chiefWon" : progress.sparringDefeated ? "sparringWon" : "dormant",
+    barrierActive: false,
+    barrierRocks: [],
     sparringEnemies: trainees,
     chiefEnemy,
   };
 }
 
-// 24 points, not the crystal barrier's 8 — that ring is purely decorative
-// backing (crystalBarrier props visually sell the wall even where two
-// circles don't quite overlap), but this one has no visual at all, so the
-// collision itself has to be airtight. barrierRingPoints() spaces points
-// evenly by *angle*, not by actual arc length — on a non-circular oval
-// (rx != ry) that means the worst-case gap between adjacent points is
-// notably wider than a naive circumference/count estimate suggests (it
-// peaks near the ry ends here). At 16 points the worst-case gap was ~127px
-// against only 110px of combined 55px-radius coverage — a real ~17px hole
-// a player could get stuck jittering against or occasionally slip through.
-// 24 points brings the worst-case gap to ~86px, safely under 110.
-function sealArenaBarrier() {
-  const points = ForestAssets.barrierRingPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 24);
-  villageArenaState.barrierObstacles = points.map((p) => ({ type: "circle", kind: "arenaBarrier", x: p.x, y: p.y, radius: 55, expiresAt: Infinity }));
-  obstacles.push(...villageArenaState.barrierObstacles);
+// The barrier is a direct analytic "are you inside this ellipse" check
+// (see isBlockedByArenaBarrier() below), not a ring of discrete obstacle
+// circles — a first version used barrierRingPoints() (a ring of circles,
+// same trick as the crystal barrier) at 16, then 24, points, but
+// barrierRingPoints() spaces points evenly by *angle*, not by actual arc
+// length. On a non-circular oval (rx != ry) that leaves the worst-case gap
+// between adjacent points meaningfully wider than a naive
+// circumference/count estimate suggests, peaking near the ry ends — a real
+// hole to get stuck jittering against or occasionally slip through no
+// matter how many points you throw at it. An exact ellipse-membership
+// test has no such gaps, by construction, at any point count.
+function isBlockedByArenaBarrier(x, y) {
+  if (!villageArenaState || !villageArenaState.barrierActive) return false;
+  const dx = (x - villageArenaState.center.x) / ARENA_RING_RX;
+  const dy = (y - villageArenaState.center.y) / ARENA_RING_RY;
+  return dx * dx + dy * dy > 1; // outside the ring — blocked, whether trying to enter or leave
 }
 
-function dropArenaBarrier() {
-  for (const obs of villageArenaState.barrierObstacles) {
-    const idx = obstacles.indexOf(obs);
-    if (idx !== -1) obstacles.splice(idx, 1);
-  }
-  villageArenaState.barrierObstacles = [];
+// Purely decorative — a ring of rocks that appears the instant the barrier
+// activates, so the boundary the player can already feel is one they can
+// also see (same idea as the crystal barrier's props, just rock instead of
+// crystal — this is a village training ring, not a cave).
+function arenaBarrierRockPoints() {
+  const points = ForestAssets.barrierRingPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 20);
+  return points.map((p, i) => ({ x: p.x, y: p.y, variant: ForestAssets.rocks[i % ForestAssets.rocks.length], scale: 1.1, flip: i % 2 === 0, destroyed: false }));
+}
+
+function activateArenaBarrier() {
+  villageArenaState.barrierActive = true;
+  villageArenaState.barrierRocks = arenaBarrierRockPoints();
+}
+
+function deactivateArenaBarrier() {
+  villageArenaState.barrierActive = false;
+  villageArenaState.barrierRocks = [];
 }
 
 // Who (if anyone) the player can currently press F to talk to in the arena
-// — the Trainees while dormant, the Chief once they're beaten. Checked the
-// same way findNearestVillageNpc() checks the Elder.
+// — pre-fight lines for anyone not yet fought, post-fight lines for anyone
+// already beaten and standing around as a friendly NPC now (see
+// updateVillageArena()'s revive step). Checked the same way
+// findNearestVillageNpc() checks the Elder; picks whichever's closer when
+// more than one is talkable (Trainees post-fight + Chief pre-fight both
+// qualify during "sparringWon").
 function nearestArenaTalker() {
   if (!villageArenaState) return null;
-  if (villageArenaState.phase === "dormant") {
-    let best = null, bestDist = NPC_INTERACT_RADIUS;
-    for (const t of villageArenaState.sparringEnemies) {
-      const d = Math.hypot(player.x - t.x, player.y - t.y);
-      if (d < bestDist) { best = t; bestDist = d; }
-    }
-    return best;
+  const candidates = [];
+  if (villageArenaState.phase === "dormant" || villageArenaState.phase === "sparringWon") {
+    candidates.push(...villageArenaState.sparringEnemies);
   }
-  if (villageArenaState.phase === "sparringWon") {
-    const c = villageArenaState.chiefEnemy;
-    return Math.hypot(player.x - c.x, player.y - c.y) < NPC_INTERACT_RADIUS ? c : null;
+  if (villageArenaState.phase === "sparringWon" || villageArenaState.phase === "chiefWon") {
+    candidates.push(villageArenaState.chiefEnemy);
   }
-  return null;
+  let best = null, bestDist = NPC_INTERACT_RADIUS;
+  for (const c of candidates) {
+    const d = Math.hypot(player.x - c.x, player.y - c.y);
+    if (d < bestDist) { best = c; bestDist = d; }
+  }
+  return best;
 }
 
+// Three tiers of lines per combatant: preFightLines (first-ever meeting),
+// retryLines (challenged before, lost to the player dying — see
+// resetVillageArenaFight() — trying again), postFightLines (already
+// beaten). hasBeenChallenged flips true the moment this is first called,
+// regardless of outcome, so a death-reset (which never touches it) is what
+// naturally lands a retry on retryLines instead of repeating the intro.
 function openArenaDialogue(enemy) {
-  openDialogue({ def: { kind: enemy.dialogueKind, name: enemy.dialogueName, lines: enemy.preFightLines, onComplete: () => beginArenaWalkIn(enemy) } });
+  let lines, onComplete;
+  if (enemy.hasBeenDefeated) {
+    lines = enemy.postFightLines;
+    onComplete = enemy === villageArenaState.chiefEnemy ? claimEmberBolt : undefined;
+  } else {
+    lines = enemy.hasBeenChallenged ? enemy.retryLines : enemy.preFightLines;
+    onComplete = () => beginArenaWalkIn(enemy);
+  }
+  enemy.hasBeenChallenged = true;
+  openDialogue({ def: { kind: enemy.dialogueKind, name: enemy.dialogueName, lines, onComplete } });
 }
 
 // Sends the enemy just talked to (and, for the Trainees, their partner too
@@ -3469,34 +3524,25 @@ function beginArenaWalkIn(enemy) {
     enemy.walkTarget = { x: villageArenaState.center.x, y: villageArenaState.center.y };
     villageArenaState.phase = "chiefWaiting";
   } else {
+    // One conversation speaks for both — whichever Trainee wasn't directly
+    // talked to still counts as challenged, so a later death-reset gives
+    // *either* of them retryLines rather than only the one originally
+    // approached.
     villageArenaState.sparringEnemies[0].walkTarget = { x: villageArenaState.center.x + ARENA_TRAINEE_RING_POS[0].x, y: villageArenaState.center.y + ARENA_TRAINEE_RING_POS[0].y };
     villageArenaState.sparringEnemies[1].walkTarget = { x: villageArenaState.center.x + ARENA_TRAINEE_RING_POS[1].x, y: villageArenaState.center.y + ARENA_TRAINEE_RING_POS[1].y };
+    villageArenaState.sparringEnemies[0].hasBeenChallenged = true;
+    villageArenaState.sparringEnemies[1].hasBeenChallenged = true;
     villageArenaState.phase = "sparringWaiting";
   }
 }
 
-function openArenaPostFightDialogue(who) {
-  if (who === "trainees") {
-    openDialogue({
-      def: {
-        kind: "traineeBlue", name: "Trainee — Blue Sash",
-        lines: [
-          "...Alright. Alright! You've got something.",
-          "Go on, then — the Chief doesn't waste time on people who can't handle the two of us.",
-        ],
-      },
-    });
-  } else {
-    openDialogue({
-      def: {
-        kind: "chief", name: "The Chief",
-        lines: [
-          "...Ha. Hah! Alright — that's a fight, that is.",
-          "You've earned this. Ember Bolt — mine to give, yours to keep. Use it well.",
-        ],
-      },
-    });
-  }
+// unlockSpell() is already idempotent, so this is safe to run every time
+// the Chief's post-fight dialogue completes, not just the first.
+function claimEmberBolt() {
+  SPELLS_ENABLED = true;
+  progress.spellsEnabled = true;
+  persistProgress();
+  unlockSpell("Ember Bolt");
 }
 
 // If the player dies mid-fight (see startPlayerDeath()), the encounter
@@ -3507,7 +3553,7 @@ function openArenaPostFightDialogue(who) {
 function resetVillageArenaFight() {
   if (!villageArenaState) return;
   if (villageArenaState.phase === "sparring" || villageArenaState.phase === "sparringWaiting") {
-    dropArenaBarrier();
+    deactivateArenaBarrier();
     villageArenaState.sparringEnemies.forEach((t, i) => {
       t.health = ENEMY_TYPES[t.kind].maxHealth;
       t.state = "idle";
@@ -3518,7 +3564,7 @@ function resetVillageArenaFight() {
     });
     villageArenaState.phase = "dormant";
   } else if (villageArenaState.phase === "chief" || villageArenaState.phase === "chiefWaiting") {
-    dropArenaBarrier();
+    deactivateArenaBarrier();
     const c = villageArenaState.chiefEnemy;
     c.health = ENEMY_TYPES.chief.maxHealth;
     c.state = "idle";
@@ -3538,31 +3584,45 @@ function updateVillageArena() {
     const bothArrived = villageArenaState.sparringEnemies.every((e) => !e.walkTarget);
     if (bothArrived && distToCenter < ARENA_ENTER_RADIUS) {
       villageArenaState.phase = "sparring";
-      sealArenaBarrier();
+      activateArenaBarrier();
       for (const t of villageArenaState.sparringEnemies) t.inert = false; // state stays "idle" — let aggroRadius pull them in naturally
     }
   } else if (villageArenaState.phase === "sparring" && villageArenaState.sparringEnemies.every((e) => e.state === "dead")) {
+    // Revive them as friendly NPCs rather than leaving them dead/invisible
+    // — walk back home, talkable there for a post-fight line (see
+    // openArenaDialogue()). No reward to claim, so no onComplete needed.
     villageArenaState.phase = "sparringWon";
-    dropArenaBarrier();
+    deactivateArenaBarrier();
     progress.sparringDefeated = true;
     persistProgress();
-    openArenaPostFightDialogue("trainees");
+    villageArenaState.sparringEnemies.forEach((t, i) => {
+      t.state = "idle";
+      t.inert = true;
+      t.hasBeenDefeated = true;
+      t.health = ENEMY_TYPES[t.kind].maxHealth;
+      t.walkTarget = { x: villageArenaState.center.x + ARENA_TRAINEE_HOME[i].x, y: villageArenaState.center.y + ARENA_TRAINEE_HOME[i].y };
+    });
   } else if (villageArenaState.phase === "chiefWaiting") {
     if (!villageArenaState.chiefEnemy.walkTarget && distToCenter < ARENA_ENTER_RADIUS) {
       villageArenaState.phase = "chief";
-      sealArenaBarrier();
+      activateArenaBarrier();
       villageArenaState.chiefEnemy.inert = false;
       villageArenaState.chiefEnemy.state = "chasing"; // a boss doesn't get an idle grace period
     }
   } else if (villageArenaState.phase === "chief" && villageArenaState.chiefEnemy.state === "dead") {
-    villageArenaState.phase = "defeated";
-    dropArenaBarrier();
+    // Same revive treatment — walks back home, talkable there, and *that*
+    // conversation (see openArenaDialogue()'s onComplete) is what actually
+    // grants Ember Bolt via claimEmberBolt(), not defeating him outright.
+    villageArenaState.phase = "chiefWon";
+    deactivateArenaBarrier();
     progress.chiefDefeated = true;
-    SPELLS_ENABLED = true;
-    progress.spellsEnabled = true;
     persistProgress();
-    unlockSpell("Ember Bolt");
-    openArenaPostFightDialogue("chief");
+    const c = villageArenaState.chiefEnemy;
+    c.state = "idle";
+    c.inert = true;
+    c.hasBeenDefeated = true;
+    c.health = ENEMY_TYPES.chief.maxHealth;
+    c.walkTarget = { x: villageArenaState.center.x + ARENA_CHIEF_HOME_OFFSET.x, y: villageArenaState.center.y + ARENA_CHIEF_HOME_OFFSET.y };
   }
 }
 
@@ -4317,11 +4377,11 @@ function updatePlayerList(mp) {
 // HUD, hiding it otherwise. Checked every frame rather than tracked as its
 // own bit of state, since "which fight (if any) is live" is already fully
 // derivable from bossArenaState/villageArenaState.
-// Per-boss fill color — the bar's stroke/frame stays the same, but a flat
-// purple reads wrong for a fire-themed boss like the Chief.
+// Per-boss color — the bar's cream frame stays the same, but a flat purple
+// (fill/sheen/side wings) reads wrong for a fire-themed boss like the Chief.
 const BOSS_HEALTH_BAR_COLORS = {
-  crystalGolem: { fill: "#6b5a8a", sheen: "#9b7fc4" },
-  chief: { fill: "#a63d3d", sheen: "#e8873d" },
+  crystalGolem: { fill: "#6b5a8a", sheen: "#9b7fc4", wing: "#5a4a8a" },
+  chief: { fill: "#a63d3d", sheen: "#e8873d", wing: "#a63d3d" },
 };
 
 function updateBossHealthBarUI() {
@@ -4343,6 +4403,8 @@ function updateBossHealthBarUI() {
   const colors = BOSS_HEALTH_BAR_COLORS[boss.enemy.kind] || BOSS_HEALTH_BAR_COLORS.crystalGolem;
   bossHealthFillEl.setAttribute("fill", colors.fill);
   bossHealthSheenEl.setAttribute("fill", colors.sheen);
+  bossHealthWingLeftEl.setAttribute("fill", colors.wing);
+  bossHealthWingRightEl.setAttribute("fill", colors.wing);
   const ratio = Math.max(0, Math.min(1, boss.enemy.health / ENEMY_TYPES[boss.enemy.kind].maxHealth));
   bossHealthFillEl.setAttribute("width", 400 * ratio);
   bossHealthSheenEl.setAttribute("width", 400 * ratio);
