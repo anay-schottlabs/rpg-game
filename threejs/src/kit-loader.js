@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 // threejs/assets/models/ — used by surroundings.js so the Nature Kit
 // metalness fix (see below) and load caching stay in one place.
 export const NATURE_BASE = "/assets/models/nature-kit/";
+export const FANTASY_TOWN_BASE = "/assets/models/fantasy-town-kit/";
 
 const loader = new GLTFLoader();
 const cache = new Map();
