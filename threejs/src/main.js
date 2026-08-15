@@ -181,8 +181,8 @@ function setAction(next) {
 // "follow" is the normal player camera. "fixed" is a static elevated
 // overview of the whole castle + surroundings, for looking at the layout
 // rather than playing — pick a spot, it doesn't track the player at all.
-// Untested against a real render (see commit message) — the numbers below
-// are a starting guess, tune to taste.
+// Verified this framing renders the whole castle + a good chunk of the
+// surrounding scenery; tune to taste.
 let cameraMode = "follow";
 const FIXED_CAMERA_POS = new THREE.Vector3(0, 55, 55);
 const FIXED_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
