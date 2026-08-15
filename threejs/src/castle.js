@@ -1,6 +1,5 @@
-import * as THREE from "three";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { addCircleCollider, addBoxCollider } from "./collision.js";
+import { place } from "./kit-loader.js";
 
 // Kenney Castle Kit pieces sit on a 1-unit grid, each ~1x1 in footprint —
 // see threejs/assets/models/CREDITS.md. Corner towers anchor a square
@@ -9,48 +8,9 @@ import { addCircleCollider, addBoxCollider } from "./collision.js";
 // No gate/moat/exterior dressing anymore — the castle is a fully sealed
 // square, and the player spawns inside it (see main.js SPAWN) with no way
 // out, while the interior itself gets built out next.
-const CASTLE_BASE = "/assets/models/castle-kit/";
 const CASTLE_HALF = 12; // corner tower centers, so the wall ring spans -12..12
 const TOWER_COLLIDER_RADIUS = 0.55;
 const CELL_HALF = 0.5; // every wall piece here is a ~1x1 footprint
-
-const loader = new GLTFLoader();
-const cache = new Map();
-
-function loadModel(name, base = CASTLE_BASE) {
-  const key = base + name;
-  if (!cache.has(key)) {
-    cache.set(
-      key,
-      new Promise((resolve, reject) => {
-        loader.load(`${base}${name}.glb`, (gltf) => resolve(gltf.scene), undefined, reject);
-      }),
-    );
-  }
-  return cache.get(key);
-}
-
-async function place(scene, name, x, z, y = 0, rotationY = 0, base = CASTLE_BASE) {
-  const template = await loadModel(name, base);
-  const instance = template.clone(true);
-  instance.position.set(x, y, z);
-  instance.rotation.y = rotationY;
-  instance.traverse((n) => {
-    if (n.isMesh) {
-      n.castShadow = true;
-      n.receiveShadow = true;
-      // Nature Kit's flat-color materials are authored with metalness: 1 —
-      // with no environment map that reads as dull grey instead of the
-      // intended flat color, since a metallic surface only shows reflected
-      // light, not its base color. Force it off; Castle/Fantasy/Graveyard
-      // kit materials are already non-metal, so this is a no-op for them.
-      const mats = Array.isArray(n.material) ? n.material : [n.material];
-      for (const m of mats) if (m) m.metalness = 0;
-    }
-  });
-  scene.add(instance);
-  return instance;
-}
 
 // Four corner towers, each varied a little (window mid-section, alternating
 // roof style, a flag) so the castle isn't four identical copy-pasted

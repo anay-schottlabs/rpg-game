@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { buildCastle } from "./castle.js";
+import { buildSurroundings } from "./surroundings.js";
 import { resolveCollisions } from "./collision.js";
 
 const scene = new THREE.Scene();
@@ -45,6 +46,7 @@ ground.receiveShadow = true;
 scene.add(ground);
 
 buildCastle(scene);
+buildSurroundings(scene);
 
 // --- Player (Mage) --------------------------------------------------------
 // The Mage rig's raw bind-pose height is ~3.36 units, but Castle Kit's own
@@ -56,8 +58,7 @@ const PLAYER_SCALE = 0.28; // ~0.94 units tall at this scale
 const PLAYER_RADIUS = 0.3; // collision circle, roughly her shoulder width at PLAYER_SCALE
 const PLAYER_SPEED = 2.2; // units/sec — ~2.3x her own height per second, a brisk walk rather than a sprint
 const TURN_SPEED = Math.PI * 2.5; // radians/sec — how fast the model turns to face movement
-const CAMERA_DISTANCE = new THREE.Vector3(0, 9, 9); // fixed angle, orbited around the player by the left/right arrows
-const CAMERA_ROTATE_SPEED = Math.PI * 0.6; // radians/sec
+const CAMERA_OFFSET = new THREE.Vector3(0, 9, 9); // fixed angle — translates with the player, never rotates
 const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
 const SPAWN = new THREE.Vector3(0, 0, 0); // castle center — there's no way out, so start inside
 
@@ -69,7 +70,6 @@ let attackAction = null;
 let currentAction = null;
 let isAttacking = false;
 const facing = new THREE.Vector3(0, 0, 1);
-let cameraAngle = 0; // extra Y rotation applied to CAMERA_DISTANCE, driven by left/right arrows
 
 // Adds a flat-grey "ghost" twin of every mesh in `root`, sharing the same
 // geometry (and, for skinned meshes, the same skeleton — so it deforms
@@ -177,7 +177,17 @@ function setAction(next) {
   currentAction = next;
 }
 
-// --- Input (WASD movement, arrows for camera + attack) --------------------
+// --- Camera mode (press V to toggle) ---------------------------------------
+// "follow" is the normal player camera. "fixed" is a static elevated
+// overview of the whole castle + surroundings, for looking at the layout
+// rather than playing — pick a spot, it doesn't track the player at all.
+// Untested against a real render (see commit message) — the numbers below
+// are a starting guess, tune to taste.
+let cameraMode = "follow";
+const FIXED_CAMERA_POS = new THREE.Vector3(0, 55, 55);
+const FIXED_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
+
+// --- Input (WASD movement, up arrow to attack, V to toggle camera) --------
 const keys = new Set();
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
@@ -185,6 +195,9 @@ window.addEventListener("keydown", (e) => {
   if (key === "arrowup" && attackAction && !isAttacking) {
     isAttacking = true;
     setAction(attackAction);
+  }
+  if (key === "v") {
+    cameraMode = cameraMode === "follow" ? "fixed" : "follow";
   }
 });
 window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -221,9 +234,6 @@ function tick() {
   requestAnimationFrame(tick);
   const dt = clock.getDelta();
 
-  if (keys.has("arrowleft")) cameraAngle += CAMERA_ROTATE_SPEED * dt;
-  if (keys.has("arrowright")) cameraAngle -= CAMERA_ROTATE_SPEED * dt;
-
   if (player) {
     const input = getInputVector();
 
@@ -245,9 +255,13 @@ function tick() {
       setAction(idleAction);
     }
 
-    const offset = CAMERA_DISTANCE.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngle);
-    camera.position.copy(player.position).add(offset);
-    camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
+    if (cameraMode === "follow") {
+      camera.position.copy(player.position).add(CAMERA_OFFSET);
+      camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
+    } else {
+      camera.position.copy(FIXED_CAMERA_POS);
+      camera.lookAt(FIXED_CAMERA_TARGET);
+    }
   }
 
   if (mixer) mixer.update(dt);
