@@ -2,63 +2,66 @@ import * as THREE from "three";
 import { place, FANTASY_TOWN_BASE as T } from "./kit-loader.js";
 import { addBoxCollider, addCircleCollider } from "./collision.js";
 
-// Procedural fantasy town, built entirely from Fantasy Town Kit pieces on a
-// 1-meter grid. Grid unit confirmed from real GLB bounding boxes (see the
-// Step 1 inventory) — every wall/corner/roof/road/fence piece is ~1x1 in
-// footprint, sharing the kit's consistent pivot convention.
+// Procedural fantasy village, v2 — full rebuild. Built entirely from
+// Fantasy Town Kit pieces on a 1-meter grid (confirmed from real GLB
+// bounding boxes). This kit ships no prefab buildings or cliff meshes —
+// its own official promo render assembles both from the same modular
+// wall/roof/rock pieces cataloged here, so that's what this generator does
+// too: multi-story timber buildings (wall loops stacked per floor, capped
+// with a peaked roof), and rock-cluster "elevation" backdrops built from
+// rock-large/rock-small/rock-wide.
 //
-// Rotation conventions below were confirmed empirically (isolated test
-// rigs, screenshot-verified against a closed 4x4 rectangle loop before
-// trusting them here) — NOT guessed from the old Castle Kit values, which
-// don't apply to this kit's differently-authored pivots:
-//   "wall" rotationY=0      -> panel spans the Z axis, sits at its cell's +X edge
-//   "wall" rotationY=PI/2   -> panel spans the X axis
-//   "wall-corner" rotationY=0        -> solid arms run South(+Z) and East(+X) ("NW post")
-//   "wall-corner" rotationY=PI/2     -> arms run North(-Z) and East(+X) ("SW post")
-//   "wall-corner" rotationY=PI       -> arms run North(-Z) and West(-X) ("SE post")
-//   "wall-corner" rotationY=3*PI/2   -> arms run South(+Z) and West(-X) ("NE post")
-// "fence"/"fence-curved" and "hedge"/"hedge-curved" share the same thin-strip
-// / symmetric-corner pivot pattern as wall/wall-corner (confirmed from their
-// bounding boxes in the Step 1 inventory), so the same rotation values are
-// reused for them below.
+// Rotation conventions (confirmed empirically, screenshot-verified against
+// a closed rectangle loop and an assembled 2-story test building):
+//   "wall"/"wall-wood" rotationY=0      -> spans Z, sits at its cell's +X edge
+//   "wall"/"wall-wood" rotationY=PI/2   -> spans X
+//   "wall-corner"/"wall-wood-corner" rotationY=0        -> arms run South(+Z)+East(+X) ("NW post")
+//   rotationY=PI/2   -> arms run North(-Z)+East(+X) ("SW post")
+//   rotationY=PI     -> arms run North(-Z)+West(-X) ("SE post")
+//   rotationY=3*PI/2 -> arms run South(+Z)+West(-X) ("NE post")
+// "fence"/"fence-curved" and "balcony-wall" share the same pivot pattern.
+// Roof pieces needing a multi-part ridge (roof-gable + ends) didn't line up
+// cleanly within the available time — "roof-point"/"roof-high-point"
+// (single-piece pyramid caps, symmetric, no rotation risk) are used
+// instead, tiled per roof cell. Not a literal match for Kenney's promo
+// ridge line, but a real peaked roof rather than the flat cap v1 used.
 
 const SPAN_Z = 0;
 const SPAN_X = Math.PI / 2;
 const CORNER_ROT = { NW: 0, SW: Math.PI / 2, SE: Math.PI, NE: (3 * Math.PI) / 2 };
 
-// Parameterized town footprint — nothing below is hand-eyeballed against
-// this specific size; changing these regenerates a differently-sized,
-// differently-populated town.
-export const TOWN = {
-  originX: -13,
-  originZ: 6,
-  width: 26,
-  depth: 26,
-  gateWidth: 3,
-  houseCount: { north: 2, east: 2 },
-};
+function mulberry32(seed) {
+  let a = seed;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 function p(scene, jobs, name, x, z, rot = 0, y = 0) {
   jobs.push(place(scene, name, x, z, y, rot, T));
 }
 
-// Rectangular wall-loop from grid corner (x0,z0) to (x1,z1). `gates`:
-// [{side:'N'|'S'|'E'|'W', at, width}], `at` = 1-based cell index along that
-// edge, `width` = how many consecutive cells to leave open (no collider —
-// a true walkable gap). The single cell flanking each side of a gate gets a
-// pillar instead of a plain wall panel, doubling as a gate-post marker.
-// wallPiece/cornerPiece let the same primitive build the town's stone
-// perimeter, low fences (arena), or a small house's walls.
-function buildPerimeter(scene, jobs, x0, z0, x1, z1, gates = [], opts = {}) {
-  const { wallPiece = "wall", cornerPiece = "wall-corner", flankPiece = "pillar-stone", collide = true } = opts;
+function rectsOverlap(a, b, margin = 0) {
+  return (
+    a.x0 - margin < b.x1 && a.x1 + margin > b.x0 && a.z0 - margin < b.z1 && a.z1 + margin > b.z0
+  );
+}
+
+// Rectangular wall-loop at a given floor (y). `gates`: [{side, at, width}].
+function buildPerimeterAtY(scene, jobs, x0, z0, x1, z1, y, gates, opts = {}) {
+  const { wallPiece = "wall", cornerPiece = "wall-corner", flankPiece = wallPiece, collide = false } = opts;
   const isGate = (side, idx) => gates.some((g) => g.side === side && idx >= g.at && idx < g.at + g.width);
   const isFlank = (side, idx) =>
     gates.some((g) => g.side === side && (idx === g.at - 1 || idx === g.at + g.width));
 
-  p(scene, jobs, cornerPiece, x0, z0, CORNER_ROT.NW);
-  p(scene, jobs, cornerPiece, x1, z0, CORNER_ROT.NE);
-  p(scene, jobs, cornerPiece, x1, z1, CORNER_ROT.SE);
-  p(scene, jobs, cornerPiece, x0, z1, CORNER_ROT.SW);
+  p(scene, jobs, cornerPiece, x0, z0, CORNER_ROT.NW, y);
+  p(scene, jobs, cornerPiece, x1, z0, CORNER_ROT.NE, y);
+  p(scene, jobs, cornerPiece, x1, z1, CORNER_ROT.SE, y);
+  p(scene, jobs, cornerPiece, x0, z1, CORNER_ROT.SW, y);
   if (collide) {
     for (const [cx, cz] of [
       [x0, z0],
@@ -78,11 +81,10 @@ function buildPerimeter(scene, jobs, x0, z0, x1, z1, gates = [], opts = {}) {
     ]) {
       if (isGate(side, idx)) continue;
       const piece = isFlank(side, idx) ? flankPiece : wallPiece;
-      p(scene, jobs, piece, x, z, piece === flankPiece ? 0 : SPAN_X);
+      p(scene, jobs, piece, x, z, SPAN_X, y);
       if (collide) addBoxCollider(x, z, 0.5, 0.5);
     }
   }
-
   for (let i = 1, idx = 1; i < z1 - z0; i++, idx++) {
     const z = z0 + i;
     for (const [side, x] of [
@@ -91,7 +93,7 @@ function buildPerimeter(scene, jobs, x0, z0, x1, z1, gates = [], opts = {}) {
     ]) {
       if (isGate(side, idx)) continue;
       const piece = isFlank(side, idx) ? flankPiece : wallPiece;
-      p(scene, jobs, piece, x, z, piece === flankPiece ? 0 : SPAN_Z);
+      p(scene, jobs, piece, x, z, SPAN_Z, y);
       if (collide) addBoxCollider(x, z, 0.5, 0.5);
     }
   }
@@ -111,9 +113,6 @@ function buildRoadLine(scene, jobs, x0, z0, x1, z1) {
   }
 }
 
-// L-shaped road path: straight along X first, then straight along Z —
-// avoids diagonal tile placement (road tiles only touch cleanly along a
-// shared edge, not corner-to-corner) for branches that need to bend.
 function buildRoadPath(scene, jobs, x0, z0, x1, z1) {
   buildRoadLine(scene, jobs, x0, z0, x1, z0);
   buildRoadLine(scene, jobs, x1, z0, x1, z1);
@@ -127,70 +126,139 @@ function buildRoadArea(scene, jobs, x0, z0, x1, z1) {
   }
 }
 
-function buildFlatRoof(scene, jobs, x0, z0, x1, z1, y) {
-  for (let x = x0; x <= x1; x++) {
-    for (let z = z0; z <= z1; z++) {
-      p(scene, jobs, "roof-flat", x, z, 0, y);
-    }
-  }
-}
-
-// A small house: wall-loop + a single door gap facing the road + a flat
-// roof cap. `doorSide` picks which edge gets the opening.
-function buildHouse(scene, jobs, cx, cz, w, d, doorSide) {
+// A timber building: `storeys` stacked wall-loops (ground floor gets a
+// door, upper floors get a balcony panel facing the door side), capped
+// with a peaked roof tiled across the footprint. One wall style for the
+// whole building — never mixed mid-run.
+function buildTimberBuilding(scene, jobs, placedRects, cx, cz, w, d, storeys, opts = {}) {
+  const {
+    wallPiece = "wall-wood",
+    cornerPiece = "wall-corner",
+    roofPiece = "roof-point",
+    doorSide = "S",
+    margin = 2.5,
+  } = opts;
   const x0 = cx - Math.floor(w / 2);
   const z0 = cz - Math.floor(d / 2);
   const x1 = x0 + w;
   const z1 = z0 + d;
+  const rect = { x0, z0, x1, z1 };
+  if (placedRects.some((r) => rectsOverlap(rect, r, margin))) return null;
+  placedRects.push(rect);
+
   const span = doorSide === "N" || doorSide === "S" ? x1 - x0 : z1 - z0;
-  const doorAt = Math.floor(span / 2);
-  buildPerimeter(scene, jobs, x0, z0, x1, z1, [{ side: doorSide, at: doorAt, width: 1 }], {
-    flankPiece: "wall", // houses don't need gate-post pillars, just skip the one panel
-  });
-  buildFlatRoof(scene, jobs, x0, z0, x1, z1, 1);
-  return { x0, z0, x1, z1 };
-}
+  const openAt = Math.floor(span / 2);
 
-// Corner flourish for the main perimeter — this kit has no dedicated tower
-// piece (confirmed in the Step 1 inventory), so a short pillar-stone stack
-// capped with a roof-point substitutes for a corner tower.
-function buildCornerTower(scene, jobs, x, z) {
-  p(scene, jobs, "pillar-stone", x, z, 0, 1);
-  p(scene, jobs, "roof-point", x, z, 0, 2);
-}
-
-// --- Zone: central plaza -------------------------------------------------
-function buildPlaza(scene, jobs, cx, cz, r) {
-  buildRoadArea(scene, jobs, cx - r, cz - r, cx + r, cz + r);
-  p(scene, jobs, "fountain-round", cx, cz, 0, 0);
-  p(scene, jobs, "fountain-round-detail", cx, cz, 0, 0);
-  const stallSpots = [
-    [cx - r + 1, cz - r + 1, "stall-green"],
-    [cx + r - 1, cz - r + 1, "stall-red"],
-    [cx - r + 1, cz + r - 1, "stall"],
-    [cx + r - 1, cz + r - 1, "stall-bench"],
-  ];
-  for (const [x, z, name] of stallSpots) p(scene, jobs, name, x, z, 0);
-  for (const [dx, dz] of [
-    [-1, -1],
-    [1, -1],
-    [-1, 1],
-    [1, 1],
-  ]) {
-    p(scene, jobs, "lantern", cx + dx * (r - 2), cz + dz * (r - 2), 0);
+  for (let s = 0; s < storeys; s++) {
+    // Ground floor gets a real doorway gap; upper floors stay fully
+    // enclosed but swap the two cells flanking that same position to
+    // balcony-wall for a "balcony over the door" look (width:0 means the
+    // gate itself never opens — only the flank swap triggers).
+    const gates = [{ side: doorSide, at: openAt, width: s === 0 ? 1 : 0 }];
+    buildPerimeterAtY(scene, jobs, x0, z0, x1, z1, s, gates, {
+      wallPiece,
+      cornerPiece,
+      flankPiece: s === storeys - 1 ? "balcony-wall" : wallPiece,
+      collide: s === 0,
+    });
   }
-  addCircleCollider(cx, cz, 1.1); // fountain itself blocks the very center
-  return { cx, cz, r };
+  for (let x = x0; x <= x1; x++) {
+    for (let z = z0; z <= z1; z++) {
+      p(scene, jobs, roofPiece, x, z, 0, storeys);
+    }
+  }
+  if ((cx + cz) % 2 === 0) {
+    p(scene, jobs, "chimney", x1, z0, 0, storeys + (roofPiece === "roof-high-point" ? 1 : 0.5));
+  }
+  return rect;
+}
+
+function buildRockCluster(scene, jobs, rng, cx, cz, count, radius) {
+  const kinds = ["rock-large", "rock-small", "rock-wide"];
+  for (let i = 0; i < count; i++) {
+    const a = rng() * Math.PI * 2;
+    const r = rng() * radius;
+    const x = Math.round((cx + Math.cos(a) * r) * 2) / 2;
+    const z = Math.round((cz + Math.sin(a) * r) * 2) / 2;
+    p(scene, jobs, kinds[Math.floor(rng() * kinds.length)], x, z, rng() * Math.PI * 2);
+  }
+}
+
+function buildTreeCluster(scene, jobs, rng, cx, cz, count, radius) {
+  const kinds = ["tree", "tree-crooked", "tree-high", "tree-high-round"];
+  for (let i = 0; i < count; i++) {
+    const a = rng() * Math.PI * 2;
+    const r = rng() * radius;
+    const x = Math.round((cx + Math.cos(a) * r) * 2) / 2;
+    const z = Math.round((cz + Math.sin(a) * r) * 2) / 2;
+    p(scene, jobs, kinds[Math.floor(rng() * kinds.length)], x, z, rng() * Math.PI * 2);
+  }
+}
+
+// Scatters `count` buildings in a loose ring around (anchorX, anchorZ),
+// skipping any placement that would overlap an already-placed rect —
+// this is how "dense, organic cluster" is generated without hand-picking
+// coordinates: positions come from the ring formula + seeded jitter, not
+// from eyeballing a layout.
+function scatterBuildings(scene, jobs, placedRects, rng, anchorX, anchorZ, count, ringR) {
+  const styles = [
+    { wallPiece: "wall-wood", cornerPiece: "wall-wood-corner" },
+    { wallPiece: "wall", cornerPiece: "wall-corner" },
+  ];
+  const roofs = ["roof-point", "roof-high-point"];
+  const sizes = [
+    [2, 2],
+    [3, 2],
+    [2, 3],
+  ];
+  const doorSides = ["N", "S", "E", "W"];
+  let placed = 0;
+  let attempts = 0;
+  while (placed < count && attempts < count * 20) {
+    attempts++;
+    const a = rng() * Math.PI * 2;
+    const r = ringR * (0.4 + rng() * 0.6);
+    const cx = Math.round(anchorX + Math.cos(a) * r);
+    const cz = Math.round(anchorZ + Math.sin(a) * r);
+    const [w, d] = sizes[Math.floor(rng() * sizes.length)];
+    const style = styles[Math.floor(rng() * styles.length)];
+    const storeys = rng() < 0.5 ? 2 : 1;
+    const built = buildTimberBuilding(scene, jobs, placedRects, cx, cz, w, d, storeys, {
+      ...style,
+      roofPiece: storeys === 2 ? roofs[1] : roofs[0],
+      doorSide: doorSides[Math.floor(rng() * doorSides.length)],
+    });
+    if (built) placed++;
+  }
+}
+
+// "windmill.glb"/"blade.glb" turned out to be just the diagonal cross-brace
+// + fan meant to hang flush on a wall face (confirmed via its raw bbox:
+// single mesh, 0.47 thick, 3.1 tall/deep — not a standalone tower). The
+// tower itself is a real 3-story timber building like any other, with the
+// cross brace mounted on its south face.
+function buildLandmarkWindmill(scene, jobs, placedRects, cx, cz, rng) {
+  buildRockCluster(scene, jobs, rng, cx, cz, 6, 2.6);
+  const built = buildTimberBuilding(scene, jobs, placedRects, cx, cz, 2, 2, 3, {
+    wallPiece: "wall-wood",
+    cornerPiece: "wall-wood-corner",
+    roofPiece: "roof-high-point",
+    doorSide: "S",
+    margin: 3,
+  });
+  if (!built) return;
+  const faceZ = built.z1 + 0.05;
+  p(scene, jobs, "windmill", cx, faceZ, 0, 1.9);
+  p(scene, jobs, "blade", cx, faceZ, 0, 1.9);
 }
 
 // --- Zone: sparring arena (low fence ring, not full walls) --------------
 function buildArena(scene, jobs, cx, cz, r, gateSide = "N") {
   buildRoadArea(scene, jobs, cx - r, cz - r, cx + r, cz + r);
-  buildPerimeter(scene, jobs, cx - r, cz - r, cx + r, cz + r, [{ side: gateSide, at: r, width: 2 }], {
+  buildPerimeterAtY(scene, jobs, cx - r, cz - r, cx + r, cz + r, 0, [{ side: gateSide, at: r, width: 2 }], {
     wallPiece: "fence",
     cornerPiece: "fence-curved",
     flankPiece: "pillar-wood",
-    collide: false,
   });
   for (const [dx, dz] of [
     [-1, -1],
@@ -218,11 +286,10 @@ function buildSpellCourse(scene, jobs, x0, x1, z) {
 // --- Zone: dungeon staircase (recessed pit faked with kit wall pieces) --
 function buildDungeonStairs(scene, jobs, cx, cz) {
   const r = 2;
-  buildPerimeter(scene, jobs, cx - r, cz - r, cx + r, cz + r, [{ side: "N", at: r, width: 1 }], {
+  buildPerimeterAtY(scene, jobs, cx - r, cz - r, cx + r, cz + r, 0, [{ side: "N", at: r, width: 1 }], {
     wallPiece: "wall-block-half",
-    cornerPiece: "wall-corner", // no half-height corner exists; regular corner reads fine as a low retaining post
+    cornerPiece: "wall-corner",
     flankPiece: "wall-block-half",
-    collide: false,
   });
   p(scene, jobs, "stairs-stone", cx, cz - r, Math.PI, 0);
   p(scene, jobs, "stairs-stone", cx, cz - r + 1, Math.PI, 0);
@@ -230,77 +297,138 @@ function buildDungeonStairs(scene, jobs, cx, cz) {
   return { cx, cz, r };
 }
 
+// --- Zone: central plaza --------------------------------------------------
+function buildPlaza(scene, jobs, cx, cz, r) {
+  buildRoadArea(scene, jobs, cx - r, cz - r, cx + r, cz + r);
+  p(scene, jobs, "fountain-round", cx, cz, 0, 0);
+  p(scene, jobs, "fountain-round-detail", cx, cz, 0, 0);
+  const stallSpots = [
+    [cx - r + 1, cz - r + 1, "stall-green"],
+    [cx + r - 1, cz - r + 1, "stall-red"],
+    [cx - r + 1, cz + r - 1, "stall"],
+    [cx + r - 1, cz + r - 1, "stall-bench"],
+  ];
+  for (const [x, z, name] of stallSpots) p(scene, jobs, name, x, z, 0);
+  for (const [dx, dz] of [
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, 1],
+  ]) {
+    p(scene, jobs, "lantern", cx + dx * (r - 2), cz + dz * (r - 2), 0);
+  }
+  addCircleCollider(cx, cz, 1.1);
+  return { cx, cz, r };
+}
+
+export const TOWN = {
+  seed: 1337,
+  frontZ: 6, // gate line
+  plazaZ: 15,
+  backStart: 30, // where the wild/rocky back quarter begins
+  backEnd: 46,
+};
+
 export async function buildTown(scene) {
   const jobs = [];
-  const { originX, originZ, width, depth, gateWidth } = TOWN;
-  const x0 = originX;
-  const z0 = originZ;
-  const x1 = originX + width;
-  const z1 = originZ + depth;
-  const plazaCx = (x0 + x1) / 2;
-  const plazaCz = (z0 + z1) / 2;
-  const plazaR = 4;
+  const rng = mulberry32(TOWN.seed);
+  const placedRects = [];
+  const { frontZ, plazaZ, backStart, backEnd } = TOWN;
 
-  const northGateAt = Math.floor(width / 2) - Math.floor(gateWidth / 2);
-  const eastGateAt = Math.floor(depth / 2) - Math.floor(gateWidth / 2);
-
-  // Phase: perimeter wall loop with 2 gate entrances.
-  buildPerimeter(scene, jobs, x0, z0, x1, z1, [
-    { side: "N", at: northGateAt, width: gateWidth },
-    { side: "E", at: eastGateAt, width: gateWidth },
-  ]);
-  for (const [cx, cz] of [
-    [x0, z0],
-    [x1, z0],
-    [x1, z1],
-    [x0, z1],
-  ]) {
-    buildCornerTower(scene, jobs, cx, cz);
+  // --- Phase: front gate + tapering side fences (no full perimeter — the
+  // back of the village is meant to open straight into the wild, per the
+  // front/back asymmetric layout) ------------------------------------
+  const gateHalf = 2;
+  p(scene, jobs, "wall-corner", -gateHalf - 3, frontZ, CORNER_ROT.NW);
+  p(scene, jobs, "wall-corner", gateHalf + 3, frontZ, CORNER_ROT.NE);
+  for (let x = -gateHalf - 2; x <= gateHalf + 2; x++) {
+    if (x >= -gateHalf && x <= gateHalf) continue; // gate opening
+    p(scene, jobs, "wall", x, frontZ, SPAN_X);
+    addBoxCollider(x, frontZ, 0.5, 0.5);
   }
+  addBoxCollider(-gateHalf - 3, frontZ, 0.5, 0.5);
+  addBoxCollider(gateHalf + 3, frontZ, 0.5, 0.5);
+  p(scene, jobs, "pillar-stone", -gateHalf, frontZ, 0, 1);
+  p(scene, jobs, "roof-point", -gateHalf, frontZ, 0, 2);
+  p(scene, jobs, "pillar-stone", gateHalf, frontZ, 0, 1);
+  p(scene, jobs, "roof-point", gateHalf, frontZ, 0, 2);
+  // Fences trail back from the two front corners for a short stretch, then
+  // simply stop — the enclosure fades rather than forming a hard box.
+  for (let i = 1; i <= 4; i++) {
+    p(scene, jobs, "fence", -gateHalf - 3, frontZ + i, SPAN_Z);
+    p(scene, jobs, "fence", gateHalf + 3, frontZ + i, SPAN_Z);
+  }
+  placedRects.push({ x0: -gateHalf - 3, z0: frontZ - 1, x1: gateHalf + 3, z1: frontZ + 1 });
 
-  const northGateX = x0 + northGateAt + Math.floor(gateWidth / 2);
-  const eastGateZ = z0 + eastGateAt + Math.floor(gateWidth / 2);
+  // --- Phase: road spine, front gate -> plaza -> fading out at the back
+  buildRoadLine(scene, jobs, 0, frontZ, 0, backStart - 4);
 
-  // Phase: road spine from each gate converging on the plaza.
-  buildRoadLine(scene, jobs, northGateX, z0, plazaCx, plazaCz - plazaR);
-  buildRoadLine(scene, jobs, x1, eastGateZ, plazaCx + plazaR, plazaCz);
+  // --- Phase: central plaza --------------------------------------------
+  const plazaR = 3;
+  buildPlaza(scene, jobs, 0, plazaZ, plazaR);
+  placedRects.push({ x0: -plazaR, z0: plazaZ - plazaR, x1: plazaR, z1: plazaZ + plazaR });
 
-  // Phase: building footprints reserved along the entrance spines, facing the road.
-  buildHouse(scene, jobs, northGateX - 4, z0 + 5, 3, 3, "S");
-  buildHouse(scene, jobs, northGateX + 4, z0 + 5, 3, 3, "S");
-  buildHouse(scene, jobs, x1 - 4, eastGateZ - 3, 3, 3, "E");
-  buildHouse(scene, jobs, x1 - 4, eastGateZ + 3, 3, 3, "E");
+  // Landmarks reserve their footprint FIRST so the building scatter below
+  // avoids them, instead of potentially placing a building on top.
+  buildLandmarkWindmill(scene, jobs, placedRects, -11, frontZ + 3, rng);
 
-  // Phase: the four functional zones, each connected to the plaza by road.
-  buildPlaza(scene, jobs, plazaCx, plazaCz, plazaR);
+  // --- Phase: dense building clusters, front/middle only -----------------
+  scatterBuildings(scene, jobs, placedRects, rng, -9, frontZ + 6, 4, 5.5);
+  scatterBuildings(scene, jobs, placedRects, rng, 9, frontZ + 5, 4, 5.5);
+  scatterBuildings(scene, jobs, placedRects, rng, -9, plazaZ + 3, 3, 4.5);
+  scatterBuildings(scene, jobs, placedRects, rng, 9, plazaZ + 2, 3, 4.5);
 
-  // Sparring arena — tucked in the far south-west corner, reached by an
-  // L-shaped branch off the plaza's south-west edge.
-  const arenaCx = x0 + 4;
-  const arenaCz = z1 - 5;
-  buildRoadPath(scene, jobs, plazaCx - plazaR, plazaCz + plazaR, arenaCx, arenaCz - 3);
+  // watermill built into the plaza's edge.
+  // watermill.glb's pivot is also at its vertical center (min Y ~ -0.9).
+  p(scene, jobs, "watermill", plazaR + 1, plazaZ, Math.PI / 2, 0.9);
+
+  // Rocks tucked behind/around the front clusters, echoing the reference's
+  // buildings-against-rock look (not just confined to the back quarter).
+  buildRockCluster(scene, jobs, rng, -9, frontZ + 8, 4, 2);
+  buildRockCluster(scene, jobs, rng, 10, frontZ + 7, 4, 2);
+  buildTreeCluster(scene, jobs, rng, -4, frontZ - 2, 3, 2);
+  buildTreeCluster(scene, jobs, rng, 4, frontZ - 2, 3, 2);
+
+  // --- Phase: the three secondary zones, connected off the plaza, kept
+  // toward the middle of the village rather than the wild back quarter --
+  const arenaCx = -9;
+  const arenaCz = plazaZ + 10;
+  buildRoadPath(scene, jobs, -plazaR, plazaZ + 3, arenaCx, arenaCz - 3);
   buildArena(scene, jobs, arenaCx, arenaCz, 3, "N");
 
-  // Spell practice course — a straight lane due west of the plaza; its own
-  // east end already touches the plaza's west edge, so no extra branch road
-  // is needed.
-  const spellZ = plazaCz;
-  buildSpellCourse(scene, jobs, x0 + 2, plazaCx - plazaR, spellZ);
+  const spellZ = plazaZ + 9;
+  buildRoadPath(scene, jobs, 0, plazaZ + 3, -3, spellZ);
+  buildSpellCourse(scene, jobs, -10, -3, spellZ);
 
-  // Dungeon staircase — straight south of the plaza.
-  const dungeonCx = plazaCx;
-  const dungeonCz = plazaCz + plazaR + 6;
-  buildRoadLine(scene, jobs, plazaCx, plazaCz + plazaR, dungeonCx, dungeonCz - 2);
+  const dungeonCx = 9;
+  const dungeonCz = plazaZ + 9;
+  buildRoadPath(scene, jobs, plazaR, plazaZ + 3, dungeonCx, dungeonCz - 2);
   buildDungeonStairs(scene, jobs, dungeonCx, dungeonCz);
+
+  // --- Phase: wild back quarter — rocks + thinning trees, no structures,
+  // no wall, the road simply stops and the ground takes over -------------
+  const backCenterZ = (backStart + backEnd) / 2;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const bx = Math.cos(a) * 10;
+    const bz = backCenterZ + Math.sin(a) * 7;
+    buildRockCluster(scene, jobs, rng, bx, bz, 3 + Math.floor(rng() * 3), 2.5);
+  }
+  for (let i = 0; i < 10; i++) {
+    const bx = (rng() - 0.5) * 26;
+    const bz = backStart + rng() * (backEnd - backStart);
+    buildTreeCluster(scene, jobs, rng, bx, bz, 1, 0.5);
+  }
 
   await Promise.all(jobs);
 
   return {
-    plaza: { cx: plazaCx, cz: plazaCz, r: plazaR },
+    plaza: { cx: 0, cz: plazaZ, r: plazaR },
     arena: { cx: arenaCx, cz: arenaCz, r: 3 },
-    spellCourse: { x0: x0 + 2, x1: plazaCx - plazaR, z: spellZ },
+    spellCourse: { x0: -10, x1: -3, z: spellZ },
     dungeon: { cx: dungeonCx, cz: dungeonCz, r: 2 },
-    bounds: { x0, z0, x1, z1 },
+    bounds: { x0: -14, z0: frontZ, x1: 14, z1: backEnd },
+    front: { x: 0, z: frontZ },
   };
 }
 
@@ -334,8 +462,6 @@ export function buildZoneCameraList(townData) {
   };
   const plazaZone = {
     name: "plaza",
-    // Catch-all for the rest of the walled town (plaza itself + connecting
-    // roads) — checked last, after the more specific zones above.
     contains: (x, z) => x >= bounds.x0 && x <= bounds.x1 && z >= bounds.z0 && z <= bounds.z1,
     anchor: anchor(plaza.cx, 14, plaza.cz + 11, plaza.cx, 0, plaza.cz),
   };
