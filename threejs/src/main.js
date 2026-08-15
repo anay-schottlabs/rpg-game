@@ -191,7 +191,7 @@ function setAction(next) {
 // the terrain — see castle.js ZONES) are still being built out. "overview"
 // is a big static shot of all three; the other three are a static shot of
 // one castle each. V steps through all four in a loop.
-const CAMERA_MODES = ["overview", "questHub", "sparringArena", "spellPractice"];
+const CAMERA_MODES = ["overview", "questHub", "sparringArena", "spellPractice", "armory"];
 let cameraModeIndex = 0;
 const ZONE_VIEWS = Object.fromEntries(
   Object.entries(ZONES).map(([name, z]) => {
@@ -207,7 +207,7 @@ const ZONE_VIEWS = Object.fromEntries(
 );
 // Castles are spread roughly -42..42 on X — wide enough to need a much
 // bigger/higher shot than a single castle's own framing.
-ZONE_VIEWS.overview = { pos: new THREE.Vector3(0, 90, 100), target: new THREE.Vector3(0, 0, 0) };
+ZONE_VIEWS.overview = { pos: new THREE.Vector3(0, 70, 80), target: new THREE.Vector3(0, 0, -7) };
 
 // --- Input (WASD movement, up arrow to attack, V to cycle camera) --------
 const keys = new Set();

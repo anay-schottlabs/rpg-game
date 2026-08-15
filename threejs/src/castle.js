@@ -146,16 +146,18 @@ function buildWallFixtures(scene, offsetX, offsetZ) {
   );
 }
 
-// --- The three areas, each its own small castle ---------------------------
-// Spread across the terrain, not too far apart / not too close (~42 units
-// center-to-center — each castle is 16-18 units wide, so there's a solid
-// open gap of terrain between any two of them). Sealed, same as before —
-// no gate is a real opening; "gate" just marks a decorative door prop.
-// Exported so main.js can point a camera at each one's center.
+// --- The four areas, each its own small castle -----------------------
+// Spread across the terrain in a non-linear cluster (quest hub roughly
+// central, the other three fanned out around it at different distances
+// and directions — not a row) rather than too far apart or collinear.
+// Sealed, same as before — no gate is a real opening; "gate" just marks a
+// decorative door prop. Exported so main.js can point a camera at each
+// one's center.
 export const ZONES = {
   questHub: { center: [0, 1] },
-  sparringArena: { center: [42, 0] },
-  spellPractice: { center: [-42, 0] },
+  sparringArena: { center: [22, 9] },
+  spellPractice: { center: [-21, -15] },
+  armory: { center: [2, -25] },
 };
 
 function questHubOutline() {
@@ -183,8 +185,8 @@ function sparringArenaOutline() {
   // Square-ish (16x16) with an east notch, no gatehouse — all-hexagon
   // towers for a rounder, "fortress ring" silhouette.
   return {
-    offsetX: 42,
-    offsetZ: 0,
+    offsetX: 22,
+    offsetZ: 9,
     outline: [
       [-8, -8],
       [8, -8],
@@ -205,8 +207,8 @@ function spellPracticeOutline() {
   // simplest silhouette of the three. Just one tall keep tower rather
   // than one at every corner, for a starker "single spire" look.
   return {
-    offsetX: -42,
-    offsetZ: 0,
+    offsetX: -21,
+    offsetZ: -15,
     outline: [
       [-6, -10],
       [6, -10],
@@ -218,8 +220,32 @@ function spellPracticeOutline() {
   };
 }
 
+function armoryOutline() {
+  // Rectangle (16x12) + a south bump like the quest hub's gatehouse, but
+  // plain — no towers on the bump itself, just wall-corners — and every
+  // main corner is a "square" tower (unlike the other three, which mix
+  // styles or go all-hexagon or single-tower). A sturdier, blockier
+  // composition than any of the others.
+  return {
+    offsetX: 2,
+    offsetZ: -25,
+    outline: [
+      [-8, -6],
+      [8, -6],
+      [8, 6],
+      [2, 6],
+      [2, 9],
+      [-2, 9],
+      [-2, 6],
+      [-8, 6],
+    ],
+    towers: { 0: "square", 1: "square", 2: "square", 7: "square" },
+    gate: null,
+  };
+}
+
 export async function buildCastle(scene) {
-  const configs = [questHubOutline(), sparringArenaOutline(), spellPracticeOutline()];
+  const configs = [questHubOutline(), sparringArenaOutline(), spellPracticeOutline(), armoryOutline()];
   const jobs = configs.map((cfg) => buildCastleShell(scene, cfg));
   jobs.push(...buildWallFixtures(scene, 0, 0));
   await Promise.all(jobs);
