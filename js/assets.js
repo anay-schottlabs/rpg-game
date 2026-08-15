@@ -1949,6 +1949,43 @@ const ForestAssets = (() => {
     return pts;
   }
 
+  // Same idea as barrierRingPoints(), but spaced evenly by *arc length*
+  // instead of angle. On a non-circular ellipse (rx != ry) angle-even
+  // spacing bunches points tightly near the ends of the major axis and
+  // spreads them out near the ends of the minor axis, which — for large
+  // overlapping prop sprites like the village arena's barrier rocks —
+  // reads as uneven clumps and gaps instead of a uniform ring. Walked via
+  // numeric arc-length integration since ellipses have no closed form.
+  function ellipseArcLengthPoints(cx, cy, rx, ry, count) {
+    const steps = 720;
+    const cumulative = [0];
+    let prevX = cx + rx;
+    let prevY = cy;
+    for (let i = 1; i <= steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const x = cx + rx * Math.cos(angle);
+      const y = cy + ry * Math.sin(angle);
+      cumulative.push(cumulative[i - 1] + Math.hypot(x - prevX, y - prevY));
+      prevX = x;
+      prevY = y;
+    }
+    const total = cumulative[steps];
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const targetLen = (i / count) * total;
+      let lo = 0;
+      let hi = steps;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cumulative[mid] < targetLen) lo = mid + 1;
+        else hi = mid;
+      }
+      const angle = (lo / steps) * Math.PI * 2;
+      pts.push({ x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) });
+    }
+    return pts;
+  }
+
   // --- Boss particles & impact ------------------------------------------
 
   // Same radial-scatter formula as the design doc's crystalShardBurst/
@@ -2050,5 +2087,5 @@ const ForestAssets = (() => {
     groundFraction: 0.5,
   };
 
-  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, playerRig, biomeTrees, biomeFoliage, enemyRigs, npcs, hubFeatures, bossArena, crystalBarrier, barrierRingPoints, bossEffects };
+  return { trees, TREE_VIEWBOX, foliage, mushrooms, rocks, campfire, ambient, spellEffects, golemRig, playerRig, biomeTrees, biomeFoliage, enemyRigs, npcs, hubFeatures, bossArena, crystalBarrier, barrierRingPoints, ellipseArcLengthPoints, bossEffects };
 })();

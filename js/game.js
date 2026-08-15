@@ -3503,8 +3503,16 @@ function isBlockedByArenaBarrier(x, y) {
 // also see (same idea as the crystal barrier's props, just rock instead of
 // crystal — this is a village training ring, not a cave).
 function arenaBarrierRockPoints() {
-  const points = ForestAssets.barrierRingPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 20);
-  return points.map((p, i) => ({ x: p.x, y: p.y, variant: ForestAssets.rocks[i % ForestAssets.rocks.length], scale: 1.1, flip: i % 2 === 0, destroyed: false }));
+  // Arc-length-even spacing, not angle-even: the ring is a wide oval
+  // (rx=330, ry=200), and angle-even points bunch up near the east/west
+  // ends and spread apart near the north/south ends. With rocks this
+  // large relative to their spacing, that unevenness reads as dense
+  // piles the player visually sinks into on the sides and open-looking
+  // gaps up top/bottom that still block movement (the collision itself
+  // is the exact analytic ellipse, unaffected by this — only where the
+  // rock props are drawn).
+  const points = ForestAssets.ellipseArcLengthPoints(villageArenaState.center.x, villageArenaState.center.y, ARENA_RING_RX, ARENA_RING_RY, 26);
+  return points.map((p, i) => ({ x: p.x, y: p.y, variant: ForestAssets.rocks[i % ForestAssets.rocks.length], scale: 0.95, flip: i % 2 === 0, destroyed: false }));
 }
 
 function activateArenaBarrier() {
