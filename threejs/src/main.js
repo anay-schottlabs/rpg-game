@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { buildCastle, ZONES } from "./castle.js";
+import { buildCastle, buildGround, ZONES } from "./castle.js";
 import { resolveCollisions } from "./collision.js";
 
 const scene = new THREE.Scene();
@@ -45,16 +45,10 @@ sun.shadow.bias = -0.0015; // avoids shadow-acne banding on large flat tiled sur
 scene.add(sun);
 
 // --- Ground -------------------------------------------------------------
-// #2cd8b8 is Nature Kit's own "grass" material color (checked directly
-// against ground_grass.glb) — the arbitrary green used before didn't match
-// the teal-tinted grass on every Nature Kit piece already in the scene.
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshStandardMaterial({ color: 0x2cd8b8 }),
-);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
+// Cuts a hole under each castle's exact footprint (see castle.js
+// buildGround) so there's no terrain floor inside any room — open space
+// until real flooring is added.
+buildGround(scene);
 
 buildCastle(scene);
 

@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { addCircleCollider, addBoxCollider } from "./collision.js";
 import { place, NATURE_BASE } from "./kit-loader.js";
 
@@ -39,11 +40,14 @@ function dirOf(dx, dz) {
 // offsetting every coordinate by (offsetX, offsetZ). `towers` and
 // `cornerOverrides` are keyed by vertex index; `gate` (optional) is a
 // local [x,z] on a horizontal (x-varying) edge to drop a decorative door
-// prop on top of the solid wall segment there.
-async function buildCastleShell(scene, { offsetX, offsetZ, outline, towers = {}, gate = null }) {
+// prop on top of the solid wall segment there. `openings` (optional) is a
+// list of local [x,z] cells to skip entirely — no wall, no collider — for
+// a hallway to connect through.
+async function buildCastleShell(scene, { offsetX, offsetZ, outline, towers = {}, gate = null, openings = [] }) {
   const jobs = [];
   const n = outline.length;
   const world = (x, z) => [x + offsetX, z + offsetZ];
+  const isOpening = (x, z) => openings.some(([ox, oz]) => ox === x && oz === z);
 
   for (let i = 0; i < n; i++) {
     const [x1, z1] = outline[i];
@@ -55,6 +59,7 @@ async function buildCastleShell(scene, { offsetX, offsetZ, outline, towers = {},
       const lo = Math.min(z1, z2);
       const hi = Math.max(z1, z2);
       for (let z = lo + 1; z <= hi - 1; z++) {
+        if (isOpening(x1, z)) continue;
         const piece = Math.abs(z - z1) % 4 === 0 ? "wall-pillar" : "wall";
         const [wx, wz] = world(x1, z);
         jobs.push(place(scene, piece, wx, wz, 0, Math.PI));
@@ -64,6 +69,7 @@ async function buildCastleShell(scene, { offsetX, offsetZ, outline, towers = {},
       const lo = Math.min(x1, x2);
       const hi = Math.max(x1, x2);
       for (let x = lo + 1; x <= hi - 1; x++) {
+        if (isOpening(x, z1)) continue;
         const piece = Math.abs(x - x1) % 4 === 0 ? "wall-pillar" : "wall";
         const [wx, wz] = world(x, z1);
         jobs.push(place(scene, piece, wx, wz, 0, Math.PI / 2));
@@ -146,6 +152,84 @@ function buildWallFixtures(scene, offsetX, offsetZ) {
   );
 }
 
+// --- Hallways connecting the castles ------------------------------------
+// Thin (1-wide walkway) corridors on the open terrain, each a pair of
+// parallel "wall" lines offset +-1 from the centerline. Where two straight
+// legs meet at a 90 degree bend, a small 2x2 "junction" box handles the
+// turn — topologically it's just a plain rectangle (proven: every corner
+// of a simple rectangle connects cleanly at rotation 0, see the very first
+// corner test), with the single wall piece on 2 of its 4 sides skipped to
+// let the corridor pass through. Straight legs stop 2 cells short of a
+// junction's center (so the junction's own corner pieces are the ones
+// touching it, not a duplicate/conflicting piece) and 1 cell short of
+// whichever castle wall they run up to (so they don't collide with that
+// wall's own already-placed pieces flanking its opening).
+function buildHallwaySegment(scene, x1, z1, x2, z2) {
+  const jobs = [];
+  if (z1 === z2) {
+    const lo = Math.min(x1, x2);
+    const hi = Math.max(x1, x2);
+    for (let x = lo; x <= hi; x++) {
+      for (const side of [-1, 1]) {
+        const z = z1 + side;
+        jobs.push(place(scene, "wall", x, z, 0, Math.PI / 2));
+        addBoxCollider(x, z, CELL_HALF, CELL_HALF);
+      }
+    }
+  } else {
+    const lo = Math.min(z1, z2);
+    const hi = Math.max(z1, z2);
+    for (let z = lo; z <= hi; z++) {
+      for (const side of [-1, 1]) {
+        const x = x1 + side;
+        jobs.push(place(scene, "wall", x, z, 0, Math.PI));
+        addBoxCollider(x, z, CELL_HALF, CELL_HALF);
+      }
+    }
+  }
+  return jobs;
+}
+
+function buildJunction(scene, bx, bz, openSides) {
+  const jobs = [];
+  for (const [cx, cz] of [
+    [bx - 1, bz - 1],
+    [bx + 1, bz - 1],
+    [bx + 1, bz + 1],
+    [bx - 1, bz + 1],
+  ]) {
+    jobs.push(place(scene, "wall-corner", cx, cz, 0, 0));
+    addBoxCollider(cx, cz, CELL_HALF, CELL_HALF);
+  }
+  const sides = {
+    N: [bx, bz - 1, Math.PI / 2],
+    S: [bx, bz + 1, Math.PI / 2],
+    W: [bx - 1, bz, Math.PI],
+    E: [bx + 1, bz, Math.PI],
+  };
+  for (const [dir, [x, z, rot]] of Object.entries(sides)) {
+    if (openSides.includes(dir)) continue;
+    jobs.push(place(scene, "wall", x, z, 0, rot));
+    addBoxCollider(x, z, CELL_HALF, CELL_HALF);
+  }
+  return jobs;
+}
+
+function buildHallways(scene) {
+  return [
+    // quest hub <-> sparring arena, bending at (14,0)
+    ...buildHallwaySegment(scene, 10, 0, 12, 0),
+    ...buildJunction(scene, 14, 0, ["W", "S"]),
+    ...buildHallwaySegment(scene, 14, 2, 14, 8),
+    // quest hub <-> spell practice, bending at (-15,0)
+    ...buildHallwaySegment(scene, -13, 0, -10, 0),
+    ...buildJunction(scene, -15, 0, ["E", "N"]),
+    ...buildHallwaySegment(scene, -15, -14, -15, -2),
+    // quest hub <-> armory — straight, no bend needed (both openings share x=2)
+    ...buildHallwaySegment(scene, 2, -15, 2, -8),
+  ];
+}
+
 // --- The four areas, each its own small castle -----------------------
 // Spread across the terrain in a non-linear cluster (quest hub roughly
 // central, the other three fanned out around it at different distances
@@ -178,6 +262,13 @@ function questHubOutline() {
     ],
     towers: { 0: "keep", 1: "square", 2: "hexRound", 4: "gate", 5: "gate", 7: "hexSecondary" },
     gate: [0, 10],
+    // Hub connects to all three other castles: east to sparring arena,
+    // west to spell practice, north to armory.
+    openings: [
+      [9, 0],
+      [-9, 0],
+      [2, -7], // x=2 to line up straight with armory's opening — no bend needed for that hallway
+    ],
   };
 }
 
@@ -199,6 +290,7 @@ function sparringArenaOutline() {
     ],
     towers: { 0: "hexRound", 1: "hexRound", 6: "hexRound", 7: "hexRound" },
     gate: null,
+    openings: [[-8, 0]], // west, toward the quest hub
   };
 }
 
@@ -217,6 +309,7 @@ function spellPracticeOutline() {
     ],
     towers: { 0: "keep" },
     gate: null,
+    openings: [[6, 0]], // east, toward the quest hub
   };
 }
 
@@ -241,12 +334,57 @@ function armoryOutline() {
     ],
     towers: { 0: "square", 1: "square", 2: "square", 7: "square" },
     gate: null,
+    openings: [[0, 9]], // south (the bump's front wall), toward the quest hub
   };
 }
 
+function allCastleConfigs() {
+  return [questHubOutline(), sparringArenaOutline(), spellPracticeOutline(), armoryOutline()];
+}
+
 export async function buildCastle(scene) {
-  const configs = [questHubOutline(), sparringArenaOutline(), spellPracticeOutline(), armoryOutline()];
-  const jobs = configs.map((cfg) => buildCastleShell(scene, cfg));
+  const jobs = allCastleConfigs().map((cfg) => buildCastleShell(scene, cfg));
   jobs.push(...buildWallFixtures(scene, 0, 0));
+  jobs.push(...buildHallways(scene));
   await Promise.all(jobs);
+}
+
+// A flat ground plane with a hole cut out under each castle's exact
+// footprint (reusing the same outline data buildCastle() walks), so
+// there's no terrain floor inside any of the rooms — just open space
+// until real flooring is added. #2cd8b8 matches Nature Kit's own "grass"
+// material color.
+export function buildGround(scene, size = 200) {
+  // ShapeGeometry is built in the XY plane; rotating it flat (-PI/2 on X)
+  // maps shape-Y to world **-Z**, confirmed empirically (a shape point at
+  // y=1 lands at world z=-1) — not the naive assumption that Y maps
+  // straight to Z. Negate Z everywhere below so the holes actually land
+  // under the walls instead of being mirrored across the X axis.
+  const half = size / 2;
+  const shape = new THREE.Shape();
+  shape.moveTo(-half, -half);
+  shape.lineTo(half, -half);
+  shape.lineTo(half, half);
+  shape.lineTo(-half, half);
+  shape.closePath();
+
+  for (const { outline, offsetX, offsetZ } of allCastleConfigs()) {
+    const hole = new THREE.Path();
+    outline.forEach(([x, z], i) => {
+      const hx = x + offsetX;
+      const hz = -(z + offsetZ);
+      if (i === 0) hole.moveTo(hx, hz);
+      else hole.lineTo(hx, hz);
+    });
+    hole.closePath();
+    shape.holes.push(hole);
+  }
+
+  const ground = new THREE.Mesh(
+    new THREE.ShapeGeometry(shape),
+    new THREE.MeshStandardMaterial({ color: 0x2cd8b8 }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
 }
