@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { buildCastle } from "./castle.js";
-import { buildSurroundings } from "./surroundings.js";
+import { buildCastle, ZONES } from "./castle.js";
 import { resolveCollisions } from "./collision.js";
 
 const scene = new THREE.Scene();
@@ -37,16 +36,18 @@ sun.shadow.bias = -0.0015; // avoids shadow-acne banding on large flat tiled sur
 scene.add(sun);
 
 // --- Ground -------------------------------------------------------------
+// #2cd8b8 is Nature Kit's own "grass" material color (checked directly
+// against ground_grass.glb) — the arbitrary green used before didn't match
+// the teal-tinted grass on every Nature Kit piece already in the scene.
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshStandardMaterial({ color: 0x4a9c4a }),
+  new THREE.MeshStandardMaterial({ color: 0x2cd8b8 }),
 );
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
 buildCastle(scene);
-buildSurroundings(scene);
 
 // --- Player (Mage) --------------------------------------------------------
 // The Mage rig's raw bind-pose height is ~3.36 units, but Castle Kit's own
@@ -177,19 +178,29 @@ function setAction(next) {
   currentAction = next;
 }
 
-// --- Camera mode (press V to toggle) ---------------------------------------
-// "follow" is the normal player camera. "fixed" is a static elevated
-// overview of the whole castle + surroundings, for looking at the layout
-// rather than playing — pick a spot, it doesn't track the player at all.
-// Verified this framing renders the whole castle + a good chunk of the
-// surrounding scenery; tune to taste.
-let cameraMode = "follow";
-// Verified this framing renders the whole castle + a good chunk of the
-// surrounding scenery; tune to taste.
-const FIXED_CAMERA_POS = new THREE.Vector3(0, 45, 45);
-const FIXED_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
+// --- Camera mode (press V to cycle) -----------------------------------
+// "follow" is the normal player camera. The other three are static shots
+// of one interior zone each (not the whole scene) — V steps through all
+// four in a loop. Positions are a first-pass guess framing each zone's
+// center (see castle.js ZONES); not yet visually confirmed for these
+// specific angles — see chat.
+const CAMERA_MODES = ["follow", "questHub", "sparringArena", "spellPractice"];
+let cameraModeIndex = 0;
+const ZONE_CAMERA_HEIGHT = { questHub: 10, sparringArena: 8, spellPractice: 8 };
+const ZONE_VIEWS = Object.fromEntries(
+  Object.entries(ZONES).map(([name, z]) => {
+    const [cx, cz] = z.center;
+    return [
+      name,
+      {
+        pos: new THREE.Vector3(cx, ZONE_CAMERA_HEIGHT[name], cz + 6),
+        target: new THREE.Vector3(cx, 0, cz),
+      },
+    ];
+  }),
+);
 
-// --- Input (WASD movement, up arrow to attack, V to toggle camera) --------
+// --- Input (WASD movement, up arrow to attack, V to cycle camera) --------
 const keys = new Set();
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
@@ -199,7 +210,7 @@ window.addEventListener("keydown", (e) => {
     setAction(attackAction);
   }
   if (key === "v") {
-    cameraMode = cameraMode === "follow" ? "fixed" : "follow";
+    cameraModeIndex = (cameraModeIndex + 1) % CAMERA_MODES.length;
   }
 });
 window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -257,12 +268,14 @@ function tick() {
       setAction(idleAction);
     }
 
+    const cameraMode = CAMERA_MODES[cameraModeIndex];
     if (cameraMode === "follow") {
       camera.position.copy(player.position).add(CAMERA_OFFSET);
       camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
     } else {
-      camera.position.copy(FIXED_CAMERA_POS);
-      camera.lookAt(FIXED_CAMERA_TARGET);
+      const view = ZONE_VIEWS[cameraMode];
+      camera.position.copy(view.pos);
+      camera.lookAt(view.target);
     }
   }
 
