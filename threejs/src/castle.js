@@ -1,44 +1,64 @@
 import { addCircleCollider, addBoxCollider } from "./collision.js";
-import { place } from "./kit-loader.js";
+import { place, NATURE_BASE } from "./kit-loader.js";
 
 // Kenney Castle Kit pieces sit on a 1-unit grid, each ~1x1 in footprint —
-// see threejs/assets/models/CREDITS.md. Corner towers anchor a rectangular
-// perimeter; straight wall segments fill the 1-unit gaps between them.
+// see threejs/assets/models/CREDITS.md.
 //
-// Redesigned after being pointed at Kenney's own Castle Kit promo shot:
-// what makes that build read as cohesive rather than copy-pasted is four
-// genuinely different towers (heights, roof styles, square vs. hexagon)
-// plus banners breaking up the wall run — not a stepped/irregular floor
-// plan. I skipped attempting the promo shot's notched, non-rectangular
-// footprint: that needs concave-corner wall pieces whose correct rotation
-// I can't verify without seeing it rendered (see chat — screenshots are
-// stale in this session), and a wrong guess there would look worse than a
-// plain corner. This keeps the same rectangular-with-simple-corners
-// structure that's already confirmed working, with the towers/banners
-// doing the work of making it feel designed.
+// Redesigned again after feedback on the plain-rectangle version: it
+// needed real corners/angles (not just a box), and the wall pieces
+// weren't actually connecting — towers were plugging the corners instead
+// of dedicated corner pieces, leaving a visible gap/mismatch at every
+// join. Fixed by empirically testing "wall-corner": built small standalone
+// test rectangles/L-shapes with it at various rotations and looked at the
+// results (screenshots recovered mid-session — see chat). Rotation 0,
+// used at literally every vertex regardless of turn direction (including
+// concave notch corners), connects cleanly — confirmed on both a plain
+// rectangle and an L-shaped outline before trusting it here.
 //
-// Fully sealed — no gate — the player spawns inside (see main.js SPAWN)
-// with no way out.
-const HALF_X = 14; // east/west extent — wall ring spans -14..14
-const HALF_Z = 10; // north/south extent — wall ring spans -10..10, non-square on purpose
-const CELL_HALF = 0.5; // every wall piece here is a ~1x1 footprint
+// Fully sealed — no functional gate, just a "wall-gated" piece at the
+// entrance that reads as a door without actually being one — the player
+// spawns inside (see main.js SPAWN) with no way out.
+const CELL_HALF = 0.5; // every wall/corner piece here is a ~1x1 footprint
 
-// Four corners, four different towers — this is the main lever for
-// "cohesive instead of repetitive": varied heights, a mix of square and
-// hexagon towers, and different roof caps.
-const CORNERS = [
-  { x: -HALF_X, z: -HALF_Z, kind: "keep" }, // tallest — the main keep
-  { x: HALF_X, z: -HALF_Z, kind: "hexRound" },
-  { x: HALF_X, z: HALF_Z, kind: "square" },
-  { x: -HALF_X, z: HALF_Z, kind: "hexSecondary" },
+// Clockwise outline of the whole perimeter. Two features break up what
+// would otherwise be a plain rectangle: a notch cut into the east wall,
+// and a gatehouse bump projecting out from the south wall.
+const OUTLINE = [
+  [-14, -10], // 0  NW
+  [14, -10], //  1  NE
+  [14, -2], //   2  east notch, top
+  [10, -2], //   3  east notch, inner
+  [10, 6], //    4  east notch, inner
+  [14, 6], //    5  east notch, bottom
+  [14, 10], //   6  SE
+  [4, 10], //    7  gatehouse, east shoulder
+  [4, 13], //    8  gatehouse, east tower
+  [-4, 13], //   9  gatehouse, west tower
+  [-4, 10], //   10 gatehouse, west shoulder
+  [-14, 10], //  11 SW
 ];
+
+// Towers only at some corners (index into OUTLINE) — the rest are plain
+// "wall-corner" joins. Mixes square/hexagon (regular/rounded) and heights.
+const TOWERS = {
+  0: "keep", // tallest — the main keep
+  1: "square",
+  6: "hexRound",
+  8: "gate",
+  9: "gate",
+  11: "hexSecondary",
+};
+
+// The entrance: centered in the gatehouse bump's front wall (between
+// vertices 8 and 9), one "wall-gated" piece instead of a plain "wall" —
+// same footprint and collider, just reads as a door.
+const GATE_POSITION = { x: 0, z: 13 };
 
 async function buildTower(scene, x, z, kind) {
   const jobs = [];
   let topY;
 
   if (kind === "keep") {
-    // Tallest tower: an extra mid section over the standard stack.
     jobs.push(
       place(scene, "tower-square-base", x, z, 0),
       place(scene, "tower-square-mid", x, z, 1.01),
@@ -48,7 +68,7 @@ async function buildTower(scene, x, z, kind) {
     );
     topY = 4.04 + 1.35;
     addCircleCollider(x, z, 0.55);
-  } else if (kind === "square") {
+  } else if (kind === "square" || kind === "gate") {
     jobs.push(
       place(scene, "tower-square-base", x, z, 0),
       place(scene, "tower-square-mid", x, z, 1.01),
@@ -80,52 +100,73 @@ async function buildTower(scene, x, z, kind) {
   return Promise.all(jobs);
 }
 
-function buildTowers(scene) {
-  return CORNERS.map(({ x, z, kind }) => buildTower(scene, x, z, kind));
-}
-
-// Straight wall segments between the corner towers, fully enclosing the
-// rectangle — no gate. Every 4th segment is swapped for "wall-pillar"
-// (same 1x1 footprint, a buttressed look) for variety along the run.
-function buildWalls(scene) {
+// Walks OUTLINE, filling each edge with straight wall segments (every 4th
+// swapped for "wall-pillar" for variety) and placing either a tower or a
+// plain "wall-corner" at each vertex.
+function buildWallsAndTowers(scene) {
   const jobs = [];
-  const pieceFor = (i) => (Math.abs(i) % 4 === 0 ? "wall-pillar" : "wall");
+  const n = OUTLINE.length;
 
-  for (let i = -HALF_X + 1; i <= HALF_X - 1; i++) {
-    jobs.push(place(scene, pieceFor(i), i, -HALF_Z, 0, 0)); // north wall
-    addBoxCollider(i, -HALF_Z, CELL_HALF, CELL_HALF);
-    jobs.push(place(scene, pieceFor(i), i, HALF_Z, 0, 0)); // south wall
-    addBoxCollider(i, HALF_Z, CELL_HALF, CELL_HALF);
-  }
-  for (let i = -HALF_Z + 1; i <= HALF_Z - 1; i++) {
-    jobs.push(place(scene, pieceFor(i), -HALF_X, i, 0, Math.PI / 2)); // west wall
-    addBoxCollider(-HALF_X, i, CELL_HALF, CELL_HALF);
-    jobs.push(place(scene, pieceFor(i), HALF_X, i, 0, Math.PI / 2)); // east wall
-    addBoxCollider(HALF_X, i, CELL_HALF, CELL_HALF);
+  for (let i = 0; i < n; i++) {
+    const [x1, z1] = OUTLINE[i];
+    const [x2, z2] = OUTLINE[(i + 1) % n];
+
+    if (x1 === x2) {
+      const lo = Math.min(z1, z2);
+      const hi = Math.max(z1, z2);
+      for (let z = lo + 1; z <= hi - 1; z++) {
+        const piece = Math.abs(z) % 4 === 0 ? "wall-pillar" : "wall";
+        jobs.push(place(scene, piece, x1, z, 0, Math.PI));
+        addBoxCollider(x1, z, CELL_HALF, CELL_HALF);
+      }
+    } else {
+      const lo = Math.min(x1, x2);
+      const hi = Math.max(x1, x2);
+      for (let x = lo + 1; x <= hi - 1; x++) {
+        const piece = Math.abs(x) % 4 === 0 ? "wall-pillar" : "wall";
+        jobs.push(place(scene, piece, x, z1, 0, Math.PI / 2));
+        addBoxCollider(x, z1, CELL_HALF, CELL_HALF);
+        // A real "wall" segment stays here for solid, reliable collision —
+        // the "door" prop is layered on top purely for the visual detail
+        // rather than swapped in for an unverified asymmetric-footprint
+        // door/gate piece that might not actually fill the 1-unit cell.
+        if (x === GATE_POSITION.x && z1 === GATE_POSITION.z) {
+          jobs.push(place(scene, "door", x, z1, 0, Math.PI / 2));
+        }
+      }
+    }
+
+    const towerKind = TOWERS[i];
+    if (towerKind) {
+      jobs.push(buildTower(scene, x1, z1, towerKind));
+    } else {
+      jobs.push(place(scene, "wall-corner", x1, z1, 0, 0));
+      addBoxCollider(x1, z1, CELL_HALF, CELL_HALF);
+    }
   }
   return jobs;
 }
 
-// A handful of banners hung on the south wall (the one the follow-camera
-// mostly frames), breaking up the flat run of crenellations — the
-// colorful-banner detail that stands out in Kenney's promo shot.
-// flag-banner-long is 2.17 units tall — way past the 1.31-unit wall, so it
-// would stick up well above the parapet instead of reading as wall-mounted.
-// flag-banner-short (0.78 tall) actually fits the wall's proportions.
-// The banner's face normal defaults to the X axis (it's ~0.04 thick in X,
-// wide in Z) rather than matching the "wall" piece's own default facing —
-// rotationY 0 left it edge-on and invisible from the front; PI/2 turns its
-// face to match the south wall.
-function buildBanners(scene) {
-  const jobs = [];
-  const positions = [-6, -3, 3, 6];
-  for (const x of positions) {
-    jobs.push(place(scene, "flag-banner-short", x, HALF_Z - 0.48, 0, Math.PI / 2));
-  }
-  return jobs;
+// A handful of Nature Kit rocks and small trees against the interior wall
+// base, breaking up otherwise-plain stretches — decorative only, sitting
+// well inside the already-collided wall line so they can't be used to
+// hide movement exploits.
+function buildWallFixtures(scene) {
+  const fixtures = [
+    ["rock_largeB", -12, -8.5, 0],
+    ["rock_largeD", -12, -4, 0.3],
+    ["tree_default", -12.5, 0, 0],
+    ["rock_tallA", -12, 4, -0.2],
+    ["tree_small", -12.5, 8, 0.4],
+    ["rock_largeC", 12, -8, 0],
+    ["tree_default", 8.5, -9, 0.5],
+    ["rock_largeA", -8, 9, 0.1],
+    ["tree_small", 8, 9, -0.3],
+  ];
+  return fixtures.map(([name, x, z, rot]) => place(scene, name, x, z, 0, rot, NATURE_BASE));
 }
 
 export async function buildCastle(scene) {
-  const jobs = [...buildTowers(scene), ...buildWalls(scene), ...buildBanners(scene)];
+  const jobs = [...buildWallsAndTowers(scene), ...buildWallFixtures(scene)];
   await Promise.all(jobs);
 }

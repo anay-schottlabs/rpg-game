@@ -184,7 +184,9 @@ function setAction(next) {
 // Verified this framing renders the whole castle + a good chunk of the
 // surrounding scenery; tune to taste.
 let cameraMode = "follow";
-const FIXED_CAMERA_POS = new THREE.Vector3(0, 55, 55);
+// Verified this framing renders the whole castle + a good chunk of the
+// surrounding scenery; tune to taste.
+const FIXED_CAMERA_POS = new THREE.Vector3(0, 45, 45);
 const FIXED_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
 
 // --- Input (WASD movement, up arrow to attack, V to toggle camera) --------
