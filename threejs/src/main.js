@@ -2,9 +2,11 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { buildCastle, buildGround, ZONES } from "./castle.js";
 import { resolveCollisions } from "./collision.js";
+import { createDayNightCycle } from "./daynight.js";
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8fd0e0);
+// scene.background is now driven by the day/night cycle (see below) — no
+// static color needed here.
 
 // A far plane of 1000 for a scene that only spans ~30 units starved the
 // depth buffer of precision and caused z-fighting (visible as flickering
@@ -26,7 +28,8 @@ window.addEventListener("resize", () => {
 });
 
 // --- Lighting ---------------------------------------------------------
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambient);
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(10, 20, 10);
 sun.castShadow = true;
@@ -43,6 +46,10 @@ sun.shadow.camera.top = 55;
 sun.shadow.camera.bottom = -55;
 sun.shadow.bias = -0.0015; // avoids shadow-acne banding on large flat tiled surfaces (e.g. the moat)
 scene.add(sun);
+
+// day -> dusk -> night -> dawn -> repeat, swapping the skybox and the sun/
+// ambient light to match (see daynight.js). Ticked every frame below.
+const dayNight = createDayNightCycle(scene, sun, ambient);
 
 // --- Ground -------------------------------------------------------------
 // Cuts a hole under each castle's exact footprint (see castle.js
@@ -277,6 +284,7 @@ function tick() {
   }
 
   if (mixer) mixer.update(dt);
+  dayNight.update(dt);
 
   // Environment-only depth pre-pass for the X-ray silhouette (see
   // addXRaySilhouette above) — player hidden so her own meshes can never

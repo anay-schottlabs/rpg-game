@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { addCircleCollider, addBoxCollider } from "./collision.js";
-import { place, NATURE_BASE } from "./kit-loader.js";
+import { place } from "./kit-loader.js";
 
 // Kenney Castle Kit pieces sit on a 1-unit grid, each ~1x1 in footprint —
 // see threejs/assets/models/CREDITS.md.
@@ -137,19 +137,6 @@ async function buildTower(scene, x, z, kind) {
 
   jobs.push(place(scene, "flag-wide", x, z, topY));
   return Promise.all(jobs);
-}
-
-// A handful of Nature Kit rocks and small trees against the interior wall
-// base of one castle, breaking up otherwise-plain stretches.
-function buildWallFixtures(scene, offsetX, offsetZ) {
-  const fixtures = [
-    ["rock_largeB", -8.5, -6.5, 0],
-    ["tree_default", -8.5, 0, 0],
-    ["rock_tallA", -8.5, 4, -0.2],
-  ];
-  return fixtures.map(([name, x, z, rot]) =>
-    place(scene, name, x + offsetX, z + offsetZ, 0, rot, NATURE_BASE),
-  );
 }
 
 // --- Hallways connecting the castles ------------------------------------
@@ -344,7 +331,6 @@ function allCastleConfigs() {
 
 export async function buildCastle(scene) {
   const jobs = allCastleConfigs().map((cfg) => buildCastleShell(scene, cfg));
-  jobs.push(...buildWallFixtures(scene, 0, 0));
   jobs.push(...buildHallways(scene));
   await Promise.all(jobs);
 }
