@@ -5,14 +5,14 @@ import { addCircleCollider, addBoxCollider } from "./collision.js";
 // Kenney Castle Kit pieces sit on a 1-unit grid, each ~1x1 in footprint —
 // see threejs/assets/models/CREDITS.md. Corner towers anchor a square
 // perimeter; straight wall segments fill the 1-unit gaps between them.
+//
+// No gate/moat/exterior dressing anymore — the castle is a fully sealed
+// square, and the player spawns inside it (see main.js SPAWN) with no way
+// out, while the interior itself gets built out next.
 const CASTLE_BASE = "/assets/models/castle-kit/";
-const NATURE_BASE = "/assets/models/nature-kit/";
-const CASTLE_HALF = 6; // corner tower centers, so the wall ring spans -6..6
-const GATE_X = 0; // wall segment skipped here, on the south (+Z) wall
-const MOAT_INNER = 8.5; // both edge-aligned to the same 1-unit grid as the
-const MOAT_OUTER = 11.5; // castle pieces — see the wall/bridge loops below
+const CASTLE_HALF = 12; // corner tower centers, so the wall ring spans -12..12
 const TOWER_COLLIDER_RADIUS = 0.55;
-const CELL_HALF = 0.5; // every wall/moat piece here is a ~1x1 footprint
+const CELL_HALF = 0.5; // every wall piece here is a ~1x1 footprint
 
 const loader = new GLTFLoader();
 const cache = new Map();
@@ -52,28 +52,6 @@ async function place(scene, name, x, z, y = 0, rotationY = 0, base = CASTLE_BASE
   return instance;
 }
 
-// Nature Kit's river tiles are on the same 1-unit grid as the castle pieces.
-// "ground_riverOpen" is the one tile in that set textured as pure open
-// water with no baked-in bank/grass edge, so tiling it across the whole
-// moat band avoids guessing bank-tile rotations — every cell looks correct
-// regardless of orientation.
-function buildMoat(scene) {
-  const jobs = [];
-  for (let x = -MOAT_OUTER + 0.5; x <= MOAT_OUTER - 0.5; x++) {
-    for (let z = -MOAT_OUTER + 0.5; z <= MOAT_OUTER - 0.5; z++) {
-      if (Math.max(Math.abs(x), Math.abs(z)) < MOAT_INNER) continue; // inside the castle apron
-      // ground_riverOpen's own mesh sits ~0.05 units below its node origin
-      // (it's modeled as a recessed riverbed) — 0.1 clears the flat ground
-      // plane at y=0, which fully hid it at smaller offsets.
-      jobs.push(place(scene, "ground_riverOpen", x, z, 0.15, 0, NATURE_BASE));
-
-      const underBridge = x === GATE_X && z > CASTLE_HALF; // the bridge crosses here — leave it walkable
-      if (!underBridge) addBoxCollider(x, z, CELL_HALF, CELL_HALF);
-    }
-  }
-  return jobs;
-}
-
 // Four corner towers, each varied a little (window mid-section, alternating
 // roof style, a flag) so the castle isn't four identical copy-pasted
 // turrets — while keeping every corner the same 1x1 footprint so the walls
@@ -98,9 +76,10 @@ function buildTowers(scene) {
   return jobs;
 }
 
-// Straight wall segments between the corner towers. Every 4th segment is
-// swapped for "wall-pillar" (same 1x1 footprint, a buttressed look) purely
-// for visual variety along an otherwise repetitive run.
+// Straight wall segments between the corner towers, fully enclosing the
+// square — no gate. Every 4th segment is swapped for "wall-pillar" (same
+// 1x1 footprint, a buttressed look) purely for visual variety along an
+// otherwise repetitive run.
 function buildWalls(scene) {
   const jobs = [];
   const pieceFor = (i) => (Math.abs(i) % 4 === 0 ? "wall-pillar" : "wall");
@@ -108,10 +87,8 @@ function buildWalls(scene) {
     jobs.push(place(scene, pieceFor(i), i, -CASTLE_HALF, 0, 0)); // north wall
     addBoxCollider(i, -CASTLE_HALF, CELL_HALF, CELL_HALF);
 
-    if (i !== GATE_X) {
-      jobs.push(place(scene, pieceFor(i), i, CASTLE_HALF, 0, 0)); // south wall, gate gap left open
-      addBoxCollider(i, CASTLE_HALF, CELL_HALF, CELL_HALF);
-    }
+    jobs.push(place(scene, pieceFor(i), i, CASTLE_HALF, 0, 0)); // south wall
+    addBoxCollider(i, CASTLE_HALF, CELL_HALF, CELL_HALF);
 
     jobs.push(place(scene, pieceFor(i), -CASTLE_HALF, i, 0, Math.PI / 2)); // west wall
     addBoxCollider(-CASTLE_HALF, i, CELL_HALF, CELL_HALF);
@@ -122,33 +99,7 @@ function buildWalls(scene) {
   return jobs;
 }
 
-function buildBridge(scene) {
-  const jobs = [];
-  for (let z = CASTLE_HALF + 1; z <= MOAT_OUTER - 0.5; z++) {
-    jobs.push(place(scene, "bridge-straight", GATE_X, z, 0, 0));
-  }
-  return jobs;
-}
-
-// A little atmosphere just outside the moat, near the approach — not part
-// of the castle structure itself, so no colliders (small/decorative enough
-// to walk past without needing to be blocking).
-function buildApproachDressing(scene) {
-  return [
-    place(scene, "siege-ballista", -3, MOAT_OUTER + 2.5, 0, Math.PI, CASTLE_BASE),
-    place(scene, "siege-catapult", 3.5, MOAT_OUTER + 3, 0, Math.PI * 0.85, CASTLE_BASE),
-    place(scene, "rocks-large", -6.5, MOAT_OUTER + 1, 0, 0.4, CASTLE_BASE),
-    place(scene, "rocks-small", 6, MOAT_OUTER + 1.5, 0, -0.6, CASTLE_BASE),
-  ];
-}
-
 export async function buildCastle(scene) {
-  const jobs = [
-    ...buildTowers(scene),
-    ...buildWalls(scene),
-    ...buildBridge(scene),
-    ...buildMoat(scene),
-    ...buildApproachDressing(scene),
-  ];
+  const jobs = [...buildTowers(scene), ...buildWalls(scene)];
   await Promise.all(jobs);
 }

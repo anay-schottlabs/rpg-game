@@ -59,7 +59,7 @@ const TURN_SPEED = Math.PI * 2.5; // radians/sec — how fast the model turns to
 const CAMERA_DISTANCE = new THREE.Vector3(0, 9, 9); // fixed angle, orbited around the player by the left/right arrows
 const CAMERA_ROTATE_SPEED = Math.PI * 0.6; // radians/sec
 const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
-const SPAWN = new THREE.Vector3(0, 0, 13.5); // just outside the moat, facing the gate
+const SPAWN = new THREE.Vector3(0, 0, 0); // castle center — there's no way out, so start inside
 
 let player = null;
 let mixer = null;
@@ -73,19 +73,44 @@ let cameraAngle = 0; // extra Y rotation applied to CAMERA_DISTANCE, driven by l
 
 // Adds a flat-grey "ghost" twin of every mesh in `root`, sharing the same
 // geometry (and, for skinned meshes, the same skeleton — so it deforms
-// identically with zero extra animation work) but drawn with depthFunc
-// GreaterDepth: it only rasterizes where the real mesh is hidden behind
-// closer geometry (a wall), giving the classic "visible through walls"
-// silhouette. depthWrite is off so it can't itself occlude anything.
+// identically with zero extra animation work).
+//
+// The ghost's visibility can't be decided by comparing against the main
+// depth buffer — that buffer also contains the player's OWN other meshes
+// (hat over hair, hand over robe, etc.), so any part overlapped by another
+// part of herself read as "occluded" and stayed grey even in the open.
+// Instead each ghost fragment is compared against `envDepthTexture`, a
+// depth buffer rendered once a frame with the player hidden — see tick()
+// below — so only real environment geometry (a wall) can trigger the
+// effect, never her own body.
+const envDepthUniforms = {
+  envDepth: { value: null },
+  resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+};
+
 function addXRaySilhouette(root) {
   const ghostMaterial = new THREE.MeshBasicMaterial({
     color: 0x888888,
     transparent: true,
     opacity: 0.55,
-    depthTest: true,
+    depthTest: false,
     depthWrite: false,
-    depthFunc: THREE.GreaterDepth,
   });
+  ghostMaterial.onBeforeCompile = (shader) => {
+    shader.uniforms.envDepth = envDepthUniforms.envDepth;
+    shader.uniforms.resolution = envDepthUniforms.resolution;
+    shader.fragmentShader = `
+      uniform sampler2D envDepth;
+      uniform vec2 resolution;
+    ${shader.fragmentShader}`.replace(
+      "void main() {",
+      `void main() {
+        vec2 screenUV = gl_FragCoord.xy / resolution;
+        float envZ = texture2D(envDepth, screenUV).x;
+        if (gl_FragCoord.z <= envZ) discard; // not behind any real environment geometry here
+      `,
+    );
+  };
 
   const meshes = [];
   root.traverse((node) => {
@@ -107,6 +132,15 @@ function addXRaySilhouette(root) {
     mesh.parent.add(ghost);
   }
 }
+
+const envDepthTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+envDepthTarget.depthTexture = new THREE.DepthTexture(window.innerWidth, window.innerHeight);
+envDepthUniforms.envDepth.value = envDepthTarget.depthTexture;
+
+window.addEventListener("resize", () => {
+  envDepthTarget.setSize(window.innerWidth, window.innerHeight);
+  envDepthUniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+});
 
 const loader = new GLTFLoader();
 loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
@@ -193,7 +227,11 @@ function tick() {
   if (player) {
     const input = getInputVector();
 
-    if (input.moving) {
+    // Attacking fully pauses movement (position, turning, and the walk/idle
+    // animation state) — she stands still through the swing, then whatever
+    // was held resumes normally once it finishes (see the mixer "finished"
+    // listener above, which clears isAttacking).
+    if (!isAttacking && input.moving) {
       player.position.x += input.x * PLAYER_SPEED * dt;
       player.position.z += input.z * PLAYER_SPEED * dt;
       resolveCollisions(player.position, PLAYER_RADIUS);
@@ -202,7 +240,7 @@ function tick() {
       const delta = angleDelta(player.rotation.y, targetAngle);
       const maxStep = TURN_SPEED * dt;
       player.rotation.y += THREE.MathUtils.clamp(delta, -maxStep, maxStep);
-      if (!isAttacking && walkAction) setAction(walkAction);
+      setAction(walkAction);
     } else if (!isAttacking && idleAction) {
       setAction(idleAction);
     }
@@ -213,6 +251,18 @@ function tick() {
   }
 
   if (mixer) mixer.update(dt);
+
+  // Environment-only depth pre-pass for the X-ray silhouette (see
+  // addXRaySilhouette above) — player hidden so her own meshes can never
+  // occlude each other in the comparison, restored immediately after.
+  if (player) {
+    player.visible = false;
+    renderer.setRenderTarget(envDepthTarget);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    player.visible = true;
+  }
+
   renderer.render(scene, camera);
 }
 tick();
