@@ -3724,6 +3724,14 @@ const DEV_TELEPORT_TARGETS = {
     player.x = village.spawnPoint.x;
     player.y = village.spawnPoint.y;
   },
+  // Just outside the ring on its west side — the same side the village
+  // path actually approaches it from — so this lands the player facing
+  // the arena rather than inside the barrier ellipse (rx=330).
+  arena() {
+    currentArea = "village";
+    player.x = VILLAGE_ARENA_CENTER.x - ARENA_RING_RX - 90;
+    player.y = VILLAGE_ARENA_CENTER.y;
+  },
   crystal_golem_boss() {
     currentArea = "world";
     player.x = bossArenaCenter.x + 60;
