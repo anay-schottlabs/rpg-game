@@ -1,20 +1,11 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { buildCastle, buildGround, ZONES } from "./castle.js";
 import { resolveCollisions } from "./collision.js";
-import { createDayNightCycle } from "./daynight.js";
 
 const scene = new THREE.Scene();
-// scene.background is now driven by the day/night cycle (see below) — no
-// static color needed here.
+scene.background = new THREE.Color(0x8fd0e0);
 
-// A far plane of 1000 for a scene that only spans ~30 units starved the
-// depth buffer of precision and caused z-fighting (visible as flickering
-// stripes where the moat met the ground plane). Tightened to fit the scene
-// — 200 covers the widest current view (the overview camera framing all
-// three spread-out castles, ~150 units from its farthest corner) with room
-// to spare, while still being far tighter than the original 1000.
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 150);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -28,48 +19,39 @@ window.addEventListener("resize", () => {
 });
 
 // --- Lighting ---------------------------------------------------------
-const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambient);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(10, 20, 10);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-// Widened from +-20 to +-55: with three castles spread out to x=+-42 (each
-// ~9 units past that), a +-20 frustum only covered the quest hub castle —
-// the other two would've rendered with no shadows at all. Same 2048 shadow
-// map now covers a much bigger area, so shadows will read softer/blockier
-// up close than before; a real tradeoff, but broken shadows on 2/3 of the
-// castles was worse.
-sun.shadow.camera.left = -55;
-sun.shadow.camera.right = 55;
-sun.shadow.camera.top = 55;
-sun.shadow.camera.bottom = -55;
-sun.shadow.bias = -0.0015; // avoids shadow-acne banding on large flat tiled surfaces (e.g. the moat)
+sun.shadow.camera.left = -20;
+sun.shadow.camera.right = 20;
+sun.shadow.camera.top = 20;
+sun.shadow.camera.bottom = -20;
+sun.shadow.bias = -0.0015; // avoids shadow-acne banding on large flat surfaces
 scene.add(sun);
 
-// day -> dusk -> night -> dawn -> repeat, swapping the skybox and the sun/
-// ambient light to match (see daynight.js). Ticked every frame below.
-const dayNight = createDayNightCycle(scene, sun, ambient);
-
 // --- Ground -------------------------------------------------------------
-// Cuts a hole under each castle's exact footprint (see castle.js
-// buildGround) so there's no terrain floor inside any room — open space
-// until real flooring is added.
-buildGround(scene);
-
-buildCastle(scene);
+// #2cd8b8 is Nature Kit's own "grass" material color (checked directly
+// against ground_grass.glb), for visual consistency with Nature Kit assets.
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.MeshStandardMaterial({ color: 0x2cd8b8 }),
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
 
 // --- Player (Mage) --------------------------------------------------------
-// The Mage rig's raw bind-pose height is ~3.36 units, but Castle Kit's own
-// grid is much smaller (wall = 1.31 units tall) — Kenney world kits and
-// KayKit characters aren't modeled to the same scale by default. Scaling
-// the character down to ~1 unit tall (roughly level with, or a bit under,
-// the wall) is what makes her fit the castle instead of towering over it.
-const PLAYER_SCALE = 0.28; // ~0.94 units tall at this scale
+// The Mage rig's raw bind-pose height is ~3.36 units — scaled down to a
+// more human-scale ~0.94 units tall.
+const PLAYER_SCALE = 0.28;
 const PLAYER_RADIUS = 0.3; // collision circle, roughly her shoulder width at PLAYER_SCALE
-const PLAYER_SPEED = 2.2; // units/sec — ~2.3x her own height per second, a brisk walk rather than a sprint
+const PLAYER_SPEED = 2.2; // units/sec — a brisk walk rather than a sprint
 const TURN_SPEED = Math.PI * 2.5; // radians/sec — how fast the model turns to face movement
-const SPAWN = new THREE.Vector3(0, 0, 0); // castle center — there's no way out, so start inside
+const CAMERA_OFFSET = new THREE.Vector3(0, 9, 9); // fixed angle — translates with the player, never rotates
+const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
+const SPAWN = new THREE.Vector3(0, 0, 0);
 
 let player = null;
 let mixer = null;
@@ -90,8 +72,8 @@ const facing = new THREE.Vector3(0, 0, 1);
 // part of herself read as "occluded" and stayed grey even in the open.
 // Instead each ghost fragment is compared against `envDepthTexture`, a
 // depth buffer rendered once a frame with the player hidden — see tick()
-// below — so only real environment geometry (a wall) can trigger the
-// effect, never her own body.
+// below — so only real environment geometry can trigger the effect, never
+// her own body.
 const envDepthUniforms = {
   envDepth: { value: null },
   resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
@@ -186,31 +168,7 @@ function setAction(next) {
   currentAction = next;
 }
 
-// --- Camera mode (press V to cycle) -----------------------------------
-// No player-follow camera for now — this is purely a level-layout preview
-// tool while the three areas (now separate small castles spread across
-// the terrain — see castle.js ZONES) are still being built out. "overview"
-// is a big static shot of all three; the other three are a static shot of
-// one castle each. V steps through all four in a loop.
-const CAMERA_MODES = ["overview", "questHub", "sparringArena", "spellPractice", "armory"];
-let cameraModeIndex = 0;
-const ZONE_VIEWS = Object.fromEntries(
-  Object.entries(ZONES).map(([name, z]) => {
-    const [cx, cz] = z.center;
-    return [
-      name,
-      {
-        pos: new THREE.Vector3(cx, 22, cz + 22),
-        target: new THREE.Vector3(cx, 0, cz),
-      },
-    ];
-  }),
-);
-// Castles are spread roughly -42..42 on X — wide enough to need a much
-// bigger/higher shot than a single castle's own framing.
-ZONE_VIEWS.overview = { pos: new THREE.Vector3(0, 70, 80), target: new THREE.Vector3(0, 0, -7) };
-
-// --- Input (WASD movement, up arrow to attack, V to cycle camera) --------
+// --- Input (WASD movement, up arrow to attack) -----------------------------
 const keys = new Set();
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
@@ -218,9 +176,6 @@ window.addEventListener("keydown", (e) => {
   if (key === "arrowup" && attackAction && !isAttacking) {
     isAttacking = true;
     setAction(attackAction);
-  }
-  if (key === "v") {
-    cameraModeIndex = (cameraModeIndex + 1) % CAMERA_MODES.length;
   }
 });
 window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -278,13 +233,11 @@ function tick() {
       setAction(idleAction);
     }
 
-    const view = ZONE_VIEWS[CAMERA_MODES[cameraModeIndex]];
-    camera.position.copy(view.pos);
-    camera.lookAt(view.target);
+    camera.position.copy(player.position).add(CAMERA_OFFSET);
+    camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
   }
 
   if (mixer) mixer.update(dt);
-  dayNight.update(dt);
 
   // Environment-only depth pre-pass for the X-ray silhouette (see
   // addXRaySilhouette above) — player hidden so her own meshes can never

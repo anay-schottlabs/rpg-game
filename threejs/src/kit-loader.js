@@ -1,10 +1,9 @@
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
-// Shared glTF loader/cache/placer for the Kenney/KayKit asset kits under
-// threejs/assets/models/ — used by castle.js and surroundings.js so the
-// Nature Kit metalness fix (see below) and load caching stay in one place.
+// Shared glTF loader/cache/placer for the Kenney asset kits under
+// threejs/assets/models/ — used by surroundings.js so the Nature Kit
+// metalness fix (see below) and load caching stay in one place.
 export const NATURE_BASE = "/assets/models/nature-kit/";
-export const CASTLE_BASE = "/assets/models/castle-kit/";
 
 const loader = new GLTFLoader();
 const cache = new Map();
@@ -22,7 +21,7 @@ export function loadModel(name, base) {
   return cache.get(key);
 }
 
-export async function place(scene, name, x, z, y = 0, rotationY = 0, base = CASTLE_BASE, scale = 1) {
+export async function place(scene, name, x, z, y = 0, rotationY = 0, base = NATURE_BASE, scale = 1) {
   const template = await loadModel(name, base);
   const instance = template.clone(true);
   instance.position.set(x, y, z);
