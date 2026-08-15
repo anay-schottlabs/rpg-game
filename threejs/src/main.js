@@ -59,8 +59,6 @@ const PLAYER_SCALE = 0.28; // ~0.94 units tall at this scale
 const PLAYER_RADIUS = 0.3; // collision circle, roughly her shoulder width at PLAYER_SCALE
 const PLAYER_SPEED = 2.2; // units/sec — ~2.3x her own height per second, a brisk walk rather than a sprint
 const TURN_SPEED = Math.PI * 2.5; // radians/sec — how fast the model turns to face movement
-const CAMERA_OFFSET = new THREE.Vector3(0, 9, 9); // fixed angle — translates with the player, never rotates
-const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
 const SPAWN = new THREE.Vector3(0, 0, 0); // castle center — there's no way out, so start inside
 
 let player = null;
@@ -179,12 +177,14 @@ function setAction(next) {
 }
 
 // --- Camera mode (press V to cycle) -----------------------------------
-// "follow" is the normal player camera. The other three are static shots
-// of one interior zone each (not the whole scene) — V steps through all
-// four in a loop. Positions are a first-pass guess framing each zone's
-// center (see castle.js ZONES); not yet visually confirmed for these
-// specific angles — see chat.
-const CAMERA_MODES = ["follow", "questHub", "sparringArena", "spellPractice"];
+// No player-follow camera for now — this is purely a level-layout preview
+// tool while the castle's interior is still being built out. "overview" is
+// a big static shot of the whole castle; the other three are static shots
+// of one interior zone each. V steps through all four in a loop. Zone view
+// positions are a first-pass guess framing each zone's center (see
+// castle.js ZONES); "overview" is the framing already confirmed to show
+// the whole castle.
+const CAMERA_MODES = ["overview", "questHub", "sparringArena", "spellPractice"];
 let cameraModeIndex = 0;
 const ZONE_CAMERA_HEIGHT = { questHub: 10, sparringArena: 8, spellPractice: 8 };
 const ZONE_VIEWS = Object.fromEntries(
@@ -199,6 +199,7 @@ const ZONE_VIEWS = Object.fromEntries(
     ];
   }),
 );
+ZONE_VIEWS.overview = { pos: new THREE.Vector3(0, 45, 45), target: new THREE.Vector3(0, 0, 0) };
 
 // --- Input (WASD movement, up arrow to attack, V to cycle camera) --------
 const keys = new Set();
@@ -268,15 +269,9 @@ function tick() {
       setAction(idleAction);
     }
 
-    const cameraMode = CAMERA_MODES[cameraModeIndex];
-    if (cameraMode === "follow") {
-      camera.position.copy(player.position).add(CAMERA_OFFSET);
-      camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
-    } else {
-      const view = ZONE_VIEWS[cameraMode];
-      camera.position.copy(view.pos);
-      camera.lookAt(view.target);
-    }
+    const view = ZONE_VIEWS[CAMERA_MODES[cameraModeIndex]];
+    camera.position.copy(view.pos);
+    camera.lookAt(view.target);
   }
 
   if (mixer) mixer.update(dt);
