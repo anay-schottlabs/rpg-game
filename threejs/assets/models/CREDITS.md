@@ -19,3 +19,29 @@ world).
 The other four packs share a `Textures/colormap.png` per folder — each
 `.glb`'s material references it via a relative path (`Textures/colormap.png`),
 so keep the `.glb` files and their `Textures/` subfolder together.
+
+## Dungeon/interior kit
+
+By [Kay Lousberg](https://kaylousberg.itch.io/) (same artist as the character
+packs below), CC0, pulled from the GitHub mirror.
+
+| Folder | Pack | Models | Source |
+|---|---|---|---|
+| `dungeon-pack/` | KayKit Dungeon Remastered | 203 (full free tier) | https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0 (same pack as https://kaylousberg.itch.io/kaykit-dungeon-pack) |
+
+Modular walls (straight, corner, T-split, crossing, windowed, arched, gated,
+broken/cracked, scaffold), floor tiles (wood/stone/dirt/grate, several
+sizes), stairs, pillars/columns, and interior props (tables, chairs, beds,
+shelves, chests, barrels, banners, torches, candles) — everything needed to
+build the castle's interior rooms and hallways.
+
+## Trade-goods / resource props
+
+| Folder | Pack | Models | Source |
+|---|---|---|---|
+| `resource-bits/` | KayKit Resource Bits | 76 (full free tier) | https://kaylousberg.itch.io/resource-bits |
+
+Stackable wood/stone/textile/ore-bar/nugget props, for dressing a market or
+storage area — ships as `.gltf` + `.bin` pairs sharing one
+`resource_bits_texture.png` in the same folder (kept alongside, same
+relative-path convention as the Kenney kits above).
