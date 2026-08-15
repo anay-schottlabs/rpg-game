@@ -8,8 +8,11 @@ scene.background = new THREE.Color(0x8fd0e0);
 
 // A far plane of 1000 for a scene that only spans ~30 units starved the
 // depth buffer of precision and caused z-fighting (visible as flickering
-// stripes where the moat met the ground plane). Tightened to fit the scene.
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 150);
+// stripes where the moat met the ground plane). Tightened to fit the scene
+// — 200 covers the widest current view (the overview camera framing all
+// three spread-out castles, ~150 units from its farthest corner) with room
+// to spare, while still being far tighter than the original 1000.
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -28,10 +31,16 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(10, 20, 10);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -20;
-sun.shadow.camera.right = 20;
-sun.shadow.camera.top = 20;
-sun.shadow.camera.bottom = -20;
+// Widened from +-20 to +-55: with three castles spread out to x=+-42 (each
+// ~9 units past that), a +-20 frustum only covered the quest hub castle —
+// the other two would've rendered with no shadows at all. Same 2048 shadow
+// map now covers a much bigger area, so shadows will read softer/blockier
+// up close than before; a real tradeoff, but broken shadows on 2/3 of the
+// castles was worse.
+sun.shadow.camera.left = -55;
+sun.shadow.camera.right = 55;
+sun.shadow.camera.top = 55;
+sun.shadow.camera.bottom = -55;
 sun.shadow.bias = -0.0015; // avoids shadow-acne banding on large flat tiled surfaces (e.g. the moat)
 scene.add(sun);
 
@@ -178,28 +187,27 @@ function setAction(next) {
 
 // --- Camera mode (press V to cycle) -----------------------------------
 // No player-follow camera for now — this is purely a level-layout preview
-// tool while the castle's interior is still being built out. "overview" is
-// a big static shot of the whole castle; the other three are static shots
-// of one interior zone each. V steps through all four in a loop. Zone view
-// positions are a first-pass guess framing each zone's center (see
-// castle.js ZONES); "overview" is the framing already confirmed to show
-// the whole castle.
+// tool while the three areas (now separate small castles spread across
+// the terrain — see castle.js ZONES) are still being built out. "overview"
+// is a big static shot of all three; the other three are a static shot of
+// one castle each. V steps through all four in a loop.
 const CAMERA_MODES = ["overview", "questHub", "sparringArena", "spellPractice"];
 let cameraModeIndex = 0;
-const ZONE_CAMERA_HEIGHT = { questHub: 10, sparringArena: 8, spellPractice: 8 };
 const ZONE_VIEWS = Object.fromEntries(
   Object.entries(ZONES).map(([name, z]) => {
     const [cx, cz] = z.center;
     return [
       name,
       {
-        pos: new THREE.Vector3(cx, ZONE_CAMERA_HEIGHT[name], cz + 6),
+        pos: new THREE.Vector3(cx, 22, cz + 22),
         target: new THREE.Vector3(cx, 0, cz),
       },
     ];
   }),
 );
-ZONE_VIEWS.overview = { pos: new THREE.Vector3(0, 45, 45), target: new THREE.Vector3(0, 0, 0) };
+// Castles are spread roughly -42..42 on X — wide enough to need a much
+// bigger/higher shot than a single castle's own framing.
+ZONE_VIEWS.overview = { pos: new THREE.Vector3(0, 90, 100), target: new THREE.Vector3(0, 0, 0) };
 
 // --- Input (WASD movement, up arrow to attack, V to cycle camera) --------
 const keys = new Set();
