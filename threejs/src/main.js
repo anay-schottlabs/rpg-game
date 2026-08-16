@@ -115,6 +115,7 @@ const FOCUS_ARROW_RADIUS = 1.4; // how far the ring of arrows sits from the play
 const FOCUS_TIME_SCALE = 0.2; // player movement/turning/animation speed while focusing
 const FOCUS_FOV = 36; // camera zooms in toward this FOV while focusing
 const FOCUS_BLEND_SPEED = 5; // how fast the zoom/distortion ramp in and out
+const ARROW_LIT_DURATION_MS = 250; // how long a pressed arrow flashes lit before turning back off
 const focusArrowOffsets = {
   up: new THREE.Vector3(0, 0, -FOCUS_ARROW_RADIUS),
   down: new THREE.Vector3(0, 0, FOCUS_ARROW_RADIUS),
@@ -122,6 +123,7 @@ const focusArrowOffsets = {
   right: new THREE.Vector3(FOCUS_ARROW_RADIUS, 0, 0),
 };
 const focusArrows = {};
+const arrowLitTimers = {}; // direction -> pending setTimeout id that turns it back off
 for (const direction of Object.keys(focusArrowOffsets)) {
   const arrow = createFloorArrow(direction, { size: 0.6 });
   arrow.visible = false;
@@ -309,20 +311,26 @@ window.addEventListener("keydown", (e) => {
     isFocusing = true;
     castSequence.length = 0;
     setFocusGlowVisible(true);
-    for (const arrow of Object.values(focusArrows)) {
+    for (const [direction, arrow] of Object.entries(focusArrows)) {
+      clearTimeout(arrowLitTimers[direction]);
       arrow.visible = true;
       setArrowLit(arrow, false);
     }
     return;
   }
 
-  // While focusing, arrow keys light up the corresponding arrow instead of
-  // steering the camera-relative attack — no spell is cast yet, this just
-  // records and displays the sequence.
+  // While focusing, arrow keys flash the corresponding arrow lit (then back
+  // off after ARROW_LIT_DURATION_MS) instead of steering the camera-relative
+  // attack — no spell is cast yet, this just records and displays the
+  // sequence as it's pressed.
   if (isFocusing && DIRECTION_KEYS[key]) {
     const direction = DIRECTION_KEYS[key];
     castSequence.push(direction);
     setArrowLit(focusArrows[direction], true);
+    clearTimeout(arrowLitTimers[direction]);
+    arrowLitTimers[direction] = setTimeout(() => {
+      setArrowLit(focusArrows[direction], false);
+    }, ARROW_LIT_DURATION_MS);
     return;
   }
 
@@ -337,7 +345,10 @@ window.addEventListener("keyup", (e) => {
   if (key === "shift") {
     isFocusing = false;
     setFocusGlowVisible(false);
-    for (const arrow of Object.values(focusArrows)) arrow.visible = false;
+    for (const [direction, arrow] of Object.entries(focusArrows)) {
+      clearTimeout(arrowLitTimers[direction]);
+      arrow.visible = false;
+    }
   }
 });
 
