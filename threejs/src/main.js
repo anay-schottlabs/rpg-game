@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { resolveCollisions } from "./collision.js";
+import { createFloorArrow, setArrowLit } from "./arrow-icon.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
@@ -54,6 +55,25 @@ const CAMERA_OFFSET = new THREE.Vector3(0, 9, 9); // fixed angle — translates 
 const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
 const SPAWN = new THREE.Vector3(0, 0, 0);
 
+// --- Spellcasting focus: hold Shift to reveal directional arrows ----------
+// No spell logic yet — just the glow + arrow lightup feedback loop.
+const FOCUS_ARROW_RADIUS = 1.4; // how far the ring of arrows sits from the player
+const focusArrowOffsets = {
+  up: new THREE.Vector3(0, 0, -FOCUS_ARROW_RADIUS),
+  down: new THREE.Vector3(0, 0, FOCUS_ARROW_RADIUS),
+  left: new THREE.Vector3(-FOCUS_ARROW_RADIUS, 0, 0),
+  right: new THREE.Vector3(FOCUS_ARROW_RADIUS, 0, 0),
+};
+const focusArrows = {};
+for (const direction of Object.keys(focusArrowOffsets)) {
+  const arrow = createFloorArrow(direction, { size: 0.6 });
+  arrow.visible = false;
+  scene.add(arrow);
+  focusArrows[direction] = arrow;
+}
+let isFocusing = false;
+const castSequence = []; // order the arrows were pressed in — not consumed yet
+
 let player = null;
 let mixer = null;
 let idleAction = null;
@@ -61,7 +81,12 @@ let walkAction = null;
 let attackAction = null;
 let currentAction = null;
 let isAttacking = false;
+let focusGlowMeshes = [];
 const facing = new THREE.Vector3(0, 0, 1);
+
+function setFocusGlowVisible(visible) {
+  for (const glow of focusGlowMeshes) glow.visible = visible;
+}
 
 // Adds a flat-grey "ghost" twin of every mesh in `root`, sharing the same
 // geometry (and, for skinned meshes, the same skeleton — so it deforms
@@ -125,6 +150,43 @@ function addXRaySilhouette(root) {
   }
 }
 
+// Adds a slightly-enlarged, backface-only twin of every mesh in `root` —
+// the classic inverted-hull outline trick: since only the back faces render,
+// the enlarged copy peeks out from behind the real mesh's silhouette as a
+// thin rim, giving a "glow" without any post-processing. Starts hidden;
+// setFocusGlowVisible() toggles it with the Shift-to-focus state.
+function addFocusGlow(root) {
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x9a6bff,
+    side: THREE.BackSide,
+    transparent: true,
+    opacity: 0.6,
+  });
+
+  const meshes = [];
+  root.traverse((node) => {
+    if (node.isMesh) meshes.push(node);
+  });
+
+  const glowMeshes = [];
+  for (const mesh of meshes) {
+    const glow = mesh.isSkinnedMesh
+      ? new THREE.SkinnedMesh(mesh.geometry, glowMaterial)
+      : new THREE.Mesh(mesh.geometry, glowMaterial);
+    if (mesh.isSkinnedMesh) {
+      glow.bindMode = mesh.bindMode;
+      glow.bind(mesh.skeleton, mesh.bindMatrix);
+    }
+    glow.position.copy(mesh.position);
+    glow.quaternion.copy(mesh.quaternion);
+    glow.scale.copy(mesh.scale).multiplyScalar(1.08);
+    glow.visible = false;
+    mesh.parent.add(glow);
+    glowMeshes.push(glow);
+  }
+  return glowMeshes;
+}
+
 const envDepthTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 envDepthTarget.depthTexture = new THREE.DepthTexture(window.innerWidth, window.innerHeight);
 envDepthUniforms.envDepth.value = envDepthTarget.depthTexture;
@@ -144,6 +206,7 @@ loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
   });
   scene.add(player);
   addXRaySilhouette(player);
+  focusGlowMeshes = addFocusGlow(player);
 
   mixer = new THREE.AnimationMixer(player);
   const idleClip = THREE.AnimationClip.findByName(gltf.animations, "Idle");
@@ -169,17 +232,54 @@ function setAction(next) {
   currentAction = next;
 }
 
-// --- Input (WASD movement, up arrow to attack) -----------------------------
+// --- Input (WASD movement, up arrow to attack, Shift to focus-cast) -------
+const DIRECTION_KEYS = {
+  arrowup: "up",
+  arrowdown: "down",
+  arrowleft: "left",
+  arrowright: "right",
+};
+
 const keys = new Set();
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
   keys.add(key);
+
+  if (key === "shift" && !isFocusing) {
+    isFocusing = true;
+    castSequence.length = 0;
+    setFocusGlowVisible(true);
+    for (const arrow of Object.values(focusArrows)) {
+      arrow.visible = true;
+      setArrowLit(arrow, false);
+    }
+    return;
+  }
+
+  // While focusing, arrow keys light up the corresponding arrow instead of
+  // steering the camera-relative attack — no spell is cast yet, this just
+  // records and displays the sequence.
+  if (isFocusing && DIRECTION_KEYS[key]) {
+    const direction = DIRECTION_KEYS[key];
+    castSequence.push(direction);
+    setArrowLit(focusArrows[direction], true);
+    return;
+  }
+
   if (key === "arrowup" && attackAction && !isAttacking) {
     isAttacking = true;
     setAction(attackAction);
   }
 });
-window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener("keyup", (e) => {
+  const key = e.key.toLowerCase();
+  keys.delete(key);
+  if (key === "shift") {
+    isFocusing = false;
+    setFocusGlowVisible(false);
+    for (const arrow of Object.values(focusArrows)) arrow.visible = false;
+  }
+});
 
 function getInputVector() {
   let x = 0;
@@ -216,11 +316,12 @@ function tick() {
   if (player) {
     const input = getInputVector();
 
-    // Attacking fully pauses movement (position, turning, and the walk/idle
-    // animation state) — she stands still through the swing, then whatever
-    // was held resumes normally once it finishes (see the mixer "finished"
-    // listener above, which clears isAttacking).
-    if (!isAttacking && input.moving) {
+    // Attacking and focus-casting both fully pause movement (position,
+    // turning, and the walk/idle animation state) — she stands still until
+    // the swing finishes or Shift is released, then whatever was held
+    // resumes normally (see the mixer "finished" listener, which clears
+    // isAttacking, and the Shift keyup handler, which clears isFocusing).
+    if (!isAttacking && !isFocusing && input.moving) {
       player.position.x += input.x * PLAYER_SPEED * dt;
       player.position.z += input.z * PLAYER_SPEED * dt;
       resolveCollisions(player.position, PLAYER_RADIUS);
@@ -232,6 +333,13 @@ function tick() {
       setAction(walkAction);
     } else if (!isAttacking && idleAction) {
       setAction(idleAction);
+    }
+
+    if (isFocusing) {
+      for (const [direction, offset] of Object.entries(focusArrowOffsets)) {
+        focusArrows[direction].position.copy(player.position).add(offset);
+        focusArrows[direction].position.y = 0.01;
+      }
     }
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
