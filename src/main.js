@@ -172,6 +172,7 @@ const dashStartPos = new THREE.Vector3();
 const dashTargetPos = new THREE.Vector3();
 let dashAfterimageCooldown = 0;
 let effectDistortionKick = 0; // extra screen-warp punch on top of focusBlend, decays after a dash/shockwave
+let cameraShake = 0; // 0..1, decays after a big impact (the shockwave's ground contact)
 
 const DASH_ERROR_FLASH_MS = 220; // how long arrows flash red after a fizzled cast
 let dashErrorFlashTimer = null;
@@ -242,8 +243,19 @@ function startDash(directionKeys) {
 // care what she's moving — it's a fixed sequence, checked by comparing the
 // full castSequence array once Shift is released.
 const SHOCKWAVE_SEQUENCE = ["up", "right", "down", "left"];
+// The rig has no dedicated "slam the staff into the ground" clip — checked
+// every animation on the Mage by scrubbing the mixer and sampling the
+// 2H_Staff bone's world-space height frame-by-frame in the browser.
+// 1H_Melee_Attack_Chop was the best match: a real windup-then-fast-strike
+// arc (unlike e.g. Spellcast_Raise, which just eases back to rest). Its
+// staff height bottoms out at t=0.87s of its 1.07s duration — that's the
+// contact frame the shockwave effect is timed to, not just "play on cast".
+const SHOCKWAVE_ANIMATION_NAME = "1H_Melee_Attack_Chop";
+const SHOCKWAVE_CONTACT_TIME = 0.87;
 let isShockwaving = false;
 let shockwaveAction = null;
+let shockwaveContactTimer = 0;
+let shockwaveEffectFired = false; // whether the ring/burst has gone off yet for the in-progress cast
 
 function sequenceMatches(sequence, pattern) {
   return sequence.length === pattern.length && sequence.every((value, i) => value === pattern[i]);
@@ -252,9 +264,9 @@ function sequenceMatches(sequence, pattern) {
 function triggerShockwave() {
   if (!player) return;
   isShockwaving = true;
+  shockwaveContactTimer = 0;
+  shockwaveEffectFired = false;
   if (shockwaveAction) setAction(shockwaveAction);
-  shockwaveEffect.trigger(player.position);
-  effectDistortionKick = 1;
 }
 
 let player = null;
@@ -411,7 +423,7 @@ loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
   mixer = new THREE.AnimationMixer(player);
   const idleClip = THREE.AnimationClip.findByName(gltf.animations, "Idle");
   const walkClip = THREE.AnimationClip.findByName(gltf.animations, "Walking_A");
-  const shockwaveClip = THREE.AnimationClip.findByName(gltf.animations, "Spellcast_Shoot");
+  const shockwaveClip = THREE.AnimationClip.findByName(gltf.animations, SHOCKWAVE_ANIMATION_NAME);
   idleAction = mixer.clipAction(idleClip);
   walkAction = mixer.clipAction(walkClip);
   shockwaveAction = mixer.clipAction(shockwaveClip);
@@ -622,6 +634,19 @@ function tick() {
       }
       focusGlowMaterial.opacity = 0.6 + Math.sin(elapsedTime * 6) * 0.15;
     }
+
+    // Fires the ring/burst at the animation's actual contact frame rather
+    // than the instant the cast starts — see SHOCKWAVE_CONTACT_TIME above.
+    if (isShockwaving && !shockwaveEffectFired) {
+      shockwaveContactTimer += dt;
+      if (shockwaveContactTimer >= SHOCKWAVE_CONTACT_TIME) {
+        shockwaveEffectFired = true;
+        shockwaveEffect.trigger(player.position);
+        effectDistortionKick = 1;
+        cameraShake = 1;
+      }
+    }
+
     // Both run every frame (not just while active) so particles/afterimages
     // already in flight finish their arc instead of vanishing abruptly.
     focusParticles.update(dt, player.position, isFocusing);
@@ -630,7 +655,14 @@ function tick() {
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
     camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
+    if (cameraShake > 0) {
+      camera.position.x += (Math.random() - 0.5) * cameraShake * 0.5;
+      camera.position.y += (Math.random() - 0.5) * cameraShake * 0.3;
+      camera.position.z += (Math.random() - 0.5) * cameraShake * 0.5;
+    }
   }
+
+  cameraShake = Math.max(0, cameraShake - dt * 4);
 
   camera.fov = THREE.MathUtils.lerp(BASE_FOV, FOCUS_FOV, focusBlend);
   camera.updateProjectionMatrix();
