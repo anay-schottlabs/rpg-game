@@ -6,6 +6,7 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { resolveCollisions } from "./collision.js";
 import { createFloorArrow, setArrowLit } from "./arrow-icon.js";
+import { createFocusParticles } from "./focus-particles.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
@@ -210,10 +211,12 @@ function addXRaySilhouette(root) {
   }
 }
 
+const FOCUS_GLOW_COLOR = 0xffdd44; // warm gold — shared by the outline rim and the sparkle particles
+
 // Shared by every glow mesh below so tick() can pulse opacity on one
 // material instead of walking the whole list every frame.
 const focusGlowMaterial = new THREE.MeshBasicMaterial({
-  color: 0x9a6bff,
+  color: FOCUS_GLOW_COLOR,
   side: THREE.BackSide,
   transparent: true,
   opacity: 0.75,
@@ -248,6 +251,11 @@ function addFocusGlow(root) {
   }
   return glowMeshes;
 }
+
+// Sparkle motes that spawn around the player and rise while focusing — the
+// actual "emanating" part of the glow, on top of the static outline rim.
+const focusParticles = createFocusParticles(FOCUS_GLOW_COLOR);
+scene.add(focusParticles.group);
 
 const envDepthTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 envDepthTarget.depthTexture = new THREE.DepthTexture(window.innerWidth, window.innerHeight);
@@ -420,6 +428,10 @@ function tick() {
       }
       focusGlowMaterial.opacity = 0.6 + Math.sin(elapsedTime * 6) * 0.15;
     }
+    // Runs every frame (not just while isFocusing) so particles already in
+    // flight finish rising and fading instead of vanishing the instant
+    // Shift is released.
+    focusParticles.update(dt, player.position, isFocusing);
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
     camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
