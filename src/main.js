@@ -10,9 +10,14 @@ import { createFloorArrow, setArrowLit, setArrowError } from "./arrow-icon.js";
 import { createFocusParticles } from "./focus-particles.js";
 import { createDashEffects } from "./dash-effects.js";
 import { createShockwaveEffect } from "./shockwave-effects.js";
+import { createHealthBar } from "./health-bar.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
+
+// No damage source yet (no enemies/combat) — sits at full health until
+// something calls healthBar.damage()/.heal().
+const healthBar = createHealthBar({ max: 100 });
 
 const BASE_FOV = 50;
 const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.1, 150);
