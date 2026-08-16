@@ -9,6 +9,7 @@ import { resolveCollisions } from "./collision.js";
 import { createFloorArrow, setArrowLit, setArrowError } from "./arrow-icon.js";
 import { createFocusParticles } from "./focus-particles.js";
 import { createDashEffects } from "./dash-effects.js";
+import { createShockwaveEffect } from "./shockwave-effects.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
@@ -165,7 +166,7 @@ let dashTimer = 0;
 const dashStartPos = new THREE.Vector3();
 const dashTargetPos = new THREE.Vector3();
 let dashAfterimageCooldown = 0;
-let dashDistortionKick = 0; // extra screen-warp punch on top of focusBlend, decays after a dash
+let effectDistortionKick = 0; // extra screen-warp punch on top of focusBlend, decays after a dash/shockwave
 
 const DASH_ERROR_FLASH_MS = 220; // how long arrows flash red after a fizzled cast
 let dashErrorFlashTimer = null;
@@ -228,16 +229,34 @@ function startDash(directionKeys) {
   setAction(walkAction);
 
   dashEffects.spawnBurst(player.position, dir);
-  dashDistortionKick = 1;
+  effectDistortionKick = 1;
+}
+
+// --- Shockwave spell: press up, right, down, left (in exactly that order,
+// nothing else mixed in) then release Shift. Unlike the dash this doesn't
+// care what she's moving — it's a fixed sequence, checked by comparing the
+// full castSequence array once Shift is released.
+const SHOCKWAVE_SEQUENCE = ["up", "right", "down", "left"];
+let isShockwaving = false;
+let shockwaveAction = null;
+
+function sequenceMatches(sequence, pattern) {
+  return sequence.length === pattern.length && sequence.every((value, i) => value === pattern[i]);
+}
+
+function triggerShockwave() {
+  if (!player) return;
+  isShockwaving = true;
+  if (shockwaveAction) setAction(shockwaveAction);
+  shockwaveEffect.trigger(player.position);
+  effectDistortionKick = 1;
 }
 
 let player = null;
 let mixer = null;
 let idleAction = null;
 let walkAction = null;
-let attackAction = null;
 let currentAction = null;
-let isAttacking = false;
 let focusGlowMeshes = [];
 const facing = new THREE.Vector3(0, 0, 1);
 
@@ -359,6 +378,10 @@ scene.add(focusParticles.group);
 const dashEffects = createDashEffects(FOCUS_GLOW_COLOR);
 scene.add(dashEffects.group);
 
+// Expanding ring + spark burst for the shockwave spell (see triggerShockwave above).
+const shockwaveEffect = createShockwaveEffect(FOCUS_GLOW_COLOR);
+scene.add(shockwaveEffect.group);
+
 const envDepthTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 envDepthTarget.depthTexture = new THREE.DepthTexture(window.innerWidth, window.innerHeight);
 envDepthUniforms.envDepth.value = envDepthTarget.depthTexture;
@@ -383,17 +406,17 @@ loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
   mixer = new THREE.AnimationMixer(player);
   const idleClip = THREE.AnimationClip.findByName(gltf.animations, "Idle");
   const walkClip = THREE.AnimationClip.findByName(gltf.animations, "Walking_A");
-  const attackClip = THREE.AnimationClip.findByName(gltf.animations, "2H_Melee_Attack_Slice");
+  const shockwaveClip = THREE.AnimationClip.findByName(gltf.animations, "Spellcast_Shoot");
   idleAction = mixer.clipAction(idleClip);
   walkAction = mixer.clipAction(walkClip);
-  attackAction = mixer.clipAction(attackClip);
-  attackAction.setLoop(THREE.LoopOnce);
-  attackAction.clampWhenFinished = true;
+  shockwaveAction = mixer.clipAction(shockwaveClip);
+  shockwaveAction.setLoop(THREE.LoopOnce);
+  shockwaveAction.clampWhenFinished = true;
   currentAction = idleAction;
   idleAction.play();
 
   mixer.addEventListener("finished", (e) => {
-    if (e.action === attackAction) isAttacking = false;
+    if (e.action === shockwaveAction) isShockwaving = false;
   });
 });
 
@@ -404,7 +427,7 @@ function setAction(next) {
   currentAction = next;
 }
 
-// --- Input (WASD movement, up arrow to attack, Shift to focus-cast) -------
+// --- Input (WASD movement, Shift to focus-cast) ---------------------------
 const DIRECTION_KEYS = {
   arrowup: "up",
   arrowdown: "down",
@@ -418,7 +441,7 @@ window.addEventListener("keydown", (e) => {
   const alreadyDown = keys.has(key);
   keys.add(key);
 
-  if (key === "shift" && !isFocusing && !isDashing) {
+  if (key === "shift" && !isFocusing && !isDashing && !isShockwaving) {
     isFocusing = true;
     castSequence.length = 0;
     dashTapCount = 0;
@@ -437,11 +460,10 @@ window.addEventListener("keydown", (e) => {
   }
 
   // While focusing, arrow keys flash the corresponding arrow lit (then back
-  // off after ARROW_LIT_DURATION_MS) instead of steering the camera-relative
-  // attack — no spell is cast yet, this just records and displays the
-  // sequence as it's pressed. She's free to press any arrow she wants here;
-  // nothing is validated (or flashes red) until Shift is released — see the
-  // keyup handler below.
+  // off after ARROW_LIT_DURATION_MS) — no spell is cast yet, this just
+  // records and displays the sequence as it's pressed. She's free to press
+  // any arrow she wants here; nothing is validated (or flashes red) until
+  // Shift is released — see the keyup handler below.
   if (isFocusing && DIRECTION_KEYS[key]) {
     const direction = DIRECTION_KEYS[key];
     castSequence.push(direction);
@@ -475,11 +497,6 @@ window.addEventListener("keydown", (e) => {
     }
     return;
   }
-
-  if (key === "arrowup" && attackAction && !isAttacking && !isDashing) {
-    isAttacking = true;
-    setAction(attackAction);
-  }
 });
 window.addEventListener("keyup", (e) => {
   const key = e.key.toLowerCase();
@@ -487,8 +504,10 @@ window.addEventListener("keyup", (e) => {
   if (key === "shift") {
     const dashFired =
       isFocusing && dashSequenceValid && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
+    const shockwaveFired = isFocusing && !dashFired && sequenceMatches(castSequence, SHOCKWAVE_SEQUENCE);
 
     if (dashFired) startDash(dashDirectionKeys);
+    else if (shockwaveFired) triggerShockwave();
 
     isFocusing = false;
     dashTapCount = 0;
@@ -499,7 +518,7 @@ window.addEventListener("keyup", (e) => {
     // Only flash if she actually pressed an arrow this focus but it didn't
     // add up to a spell — letting go of Shift without touching the arrows
     // at all isn't a failed cast, it's just not casting.
-    if (!dashFired && anyDirectionPressed) {
+    if (!dashFired && !shockwaveFired && anyDirectionPressed) {
       flashDashError();
     } else {
       for (const [direction, arrow] of Object.entries(focusArrows)) {
@@ -552,7 +571,7 @@ function tick() {
   focusBlend += ((isFocusing ? 1 : 0) - focusBlend) * Math.min(1, dt * FOCUS_BLEND_SPEED);
   const effectiveDt = isFocusing ? dt * FOCUS_TIME_SCALE : dt;
 
-  dashDistortionKick = Math.max(0, dashDistortionKick - dt * 3);
+  effectDistortionKick = Math.max(0, effectDistortionKick - dt * 3);
 
   if (player) {
     const input = getInputVector();
@@ -574,10 +593,10 @@ function tick() {
       }
 
       if (t >= 1) isDashing = false;
-    } else if (!isAttacking && input.moving) {
-      // Attacking fully pauses movement; focus-casting only slows it (via
-      // effectiveDt above) — she can still walk around while lighting up
-      // arrows mid-cast.
+    } else if (!isShockwaving && input.moving) {
+      // Casting a shockwave fully pauses movement; focus-casting only slows
+      // it (via effectiveDt above) — she can still walk around while
+      // lighting up arrows mid-cast.
       player.position.x += input.x * PLAYER_SPEED * effectiveDt;
       player.position.z += input.z * PLAYER_SPEED * effectiveDt;
       resolveCollisions(player.position, PLAYER_RADIUS);
@@ -587,7 +606,7 @@ function tick() {
       const maxStep = TURN_SPEED * effectiveDt;
       player.rotation.y += THREE.MathUtils.clamp(delta, -maxStep, maxStep);
       setAction(walkAction);
-    } else if (!isAttacking && idleAction) {
+    } else if (!isShockwaving && idleAction) {
       setAction(idleAction);
     }
 
@@ -602,6 +621,7 @@ function tick() {
     // already in flight finish their arc instead of vanishing abruptly.
     focusParticles.update(dt, player.position, isFocusing);
     dashEffects.update(dt);
+    shockwaveEffect.update(dt);
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
     camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
@@ -609,7 +629,7 @@ function tick() {
 
   camera.fov = THREE.MathUtils.lerp(BASE_FOV, FOCUS_FOV, focusBlend);
   camera.updateProjectionMatrix();
-  magicDistortionPass.uniforms.uStrength.value = Math.max(focusBlend, dashDistortionKick);
+  magicDistortionPass.uniforms.uStrength.value = Math.max(focusBlend, effectDistortionKick);
   magicDistortionPass.uniforms.uTime.value = elapsedTime;
 
   if (mixer) mixer.update(effectiveDt);
