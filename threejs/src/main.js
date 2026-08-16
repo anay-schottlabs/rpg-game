@@ -52,11 +52,7 @@ const PLAYER_SPEED = 2.2; // units/sec — a brisk walk rather than a sprint
 const TURN_SPEED = Math.PI * 2.5; // radians/sec — how fast the model turns to face movement
 const CAMERA_OFFSET = new THREE.Vector3(0, 9, 9); // fixed angle — translates with the player, never rotates
 const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
-const DEAD_ZONE_RADIUS = 1.5; // player can drift this far (XZ) from the camera's focus point before it starts tracking
 const SPAWN = new THREE.Vector3(0, 0, 0);
-// The point the camera actually follows — only pulled toward the player once
-// she exits the dead zone, and just far enough to keep her at its edge.
-const cameraTarget = SPAWN.clone();
 
 let player = null;
 let mixer = null;
@@ -238,18 +234,8 @@ function tick() {
       setAction(idleAction);
     }
 
-    const dx = player.position.x - cameraTarget.x;
-    const dz = player.position.z - cameraTarget.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > DEAD_ZONE_RADIUS) {
-      const pull = dist - DEAD_ZONE_RADIUS;
-      cameraTarget.x += (dx / dist) * pull;
-      cameraTarget.z += (dz / dist) * pull;
-    }
-    cameraTarget.y = player.position.y;
-
-    camera.position.copy(cameraTarget).add(CAMERA_OFFSET);
-    camera.lookAt(cameraTarget.x, cameraTarget.y + LOOK_HEIGHT, cameraTarget.z);
+    camera.position.copy(player.position).add(CAMERA_OFFSET);
+    camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
   }
 
   if (mixer) mixer.update(dt);
