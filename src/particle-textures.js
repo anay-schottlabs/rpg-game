@@ -8,7 +8,7 @@ const cache = new Map();
 // texture isn't fetched/decoded more than once.
 export function loadParticleTexture(name) {
   if (!cache.has(name)) {
-    cache.set(name, loader.load(`/assets/particle-pack/png-transparent/${name}.png`));
+    cache.set(name, loader.load(`${import.meta.env.BASE_URL}assets/particle-pack/png-transparent/${name}.png`));
   }
   return cache.get(name);
 }

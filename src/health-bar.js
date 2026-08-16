@@ -1,7 +1,7 @@
 // Built from Kenney's UI Pack: RPG Expansion (CC0) — 3-slice bar sprites
 // (left cap / stretchy mid / right cap) matching the pixel-art fantasy style
 // of the rest of the kits already in this project.
-const SPRITE_BASE = "/assets/ui-pack-rpg-expansion/PNG/";
+const SPRITE_BASE = `${import.meta.env.BASE_URL}assets/ui-pack-rpg-expansion/PNG/`;
 const SPRITE_HEIGHT = 18; // native pixel height of the bar sprites
 const SPRITE_CAP_WIDTH = 9; // native pixel width of the left/right cap sprites
 

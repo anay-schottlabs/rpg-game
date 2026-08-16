@@ -514,7 +514,7 @@ window.addEventListener("resize", () => {
 });
 
 const loader = new GLTFLoader();
-loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
+loader.load(`${import.meta.env.BASE_URL}assets/characters/adventurers/Characters/Mage.glb`, (gltf) => {
   player = gltf.scene;
   player.position.copy(SPAWN);
   player.scale.setScalar(PLAYER_SCALE);
