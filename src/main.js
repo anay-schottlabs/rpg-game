@@ -147,10 +147,11 @@ const castSequence = []; // order the arrows were pressed in — not consumed ye
 // Shift, to dash that way. The two taps don't have to be identical — each
 // just has to match whichever way she's currently moving at the moment of
 // that press — diagonal movement (e.g. W+D) requires both matching arrow
-// keys pressed (in either order) to complete that tap. She's free to press
-// whatever arrows she likes while focusing — presses that don't match her
-// current movement just don't count toward anything; nothing is validated
-// (or resets progress) until Shift is released.
+// keys pressed (in either order) to complete that tap. Nothing flashes red
+// (or otherwise interrupts her) while she's pressing keys, but ANY press
+// that doesn't match her current movement — even one mixed in among
+// otherwise-correct taps — invalidates the whole cast; it's only reported
+// (via the red flash) once Shift is released.
 const DASH_DISTANCE = 3.2; // units covered by a dash
 const DASH_DURATION = 0.16; // seconds
 const REQUIRED_DASH_TAPS = 2;
@@ -158,6 +159,7 @@ let dashTapCount = 0;
 let dashDirectionKeys = null; // Set<"up"|"down"|"left"|"right"> the taps last matched
 const pressedThisTap = new Set(); // arrow-key directions pressed toward the current tap
 let anyDirectionPressed = false; // whether *any* arrow was pressed this focus — distinguishes "no attempt" from "wrong attempt"
+let dashSequenceValid = true; // flips false the moment any mismatched key is pressed, for the rest of this focus
 let isDashing = false;
 let dashTimer = 0;
 const dashStartPos = new THREE.Vector3();
@@ -423,6 +425,7 @@ window.addEventListener("keydown", (e) => {
     dashDirectionKeys = null;
     pressedThisTap.clear();
     anyDirectionPressed = false;
+    dashSequenceValid = true;
     setFocusGlowVisible(true);
     clearTimeout(dashErrorFlashTimer);
     for (const [direction, arrow] of Object.entries(focusArrows)) {
@@ -453,7 +456,9 @@ window.addEventListener("keydown", (e) => {
     // that matches her current movement direction contributes toward the
     // current tap, which completes once every direction of that movement
     // has been pressed (both arrows together for a diagonal). A press that
-    // doesn't match just doesn't count toward anything — no penalty.
+    // doesn't match is quietly noted (dashSequenceValid) rather than shown —
+    // it doesn't disrupt her taps in progress, but it means the cast can't
+    // succeed even if she goes on to complete a valid-looking double-tap.
     if (!alreadyDown) {
       anyDirectionPressed = true;
       const movementDirs = currentMovementDirections();
@@ -464,6 +469,8 @@ window.addEventListener("keydown", (e) => {
           dashDirectionKeys = new Set(movementDirs);
           pressedThisTap.clear();
         }
+      } else {
+        dashSequenceValid = false;
       }
     }
     return;
@@ -478,7 +485,8 @@ window.addEventListener("keyup", (e) => {
   const key = e.key.toLowerCase();
   keys.delete(key);
   if (key === "shift") {
-    const dashFired = isFocusing && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
+    const dashFired =
+      isFocusing && dashSequenceValid && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
 
     if (dashFired) startDash(dashDirectionKeys);
 

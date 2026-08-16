@@ -1,7 +1,7 @@
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 // Shared glTF loader/cache/placer for the Kenney asset kits under
-// threejs/assets/models/ — used by surroundings.js so the Nature Kit
+// assets/models/ — used by surroundings.js so the Nature Kit
 // metalness fix (see below) and load caching stay in one place.
 export const NATURE_BASE = "/assets/models/nature-kit/";
 export const FANTASY_TOWN_BASE = "/assets/models/fantasy-town-kit/";
