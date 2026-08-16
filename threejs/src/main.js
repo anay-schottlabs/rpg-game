@@ -1,8 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { resolveCollisions } from "./collision.js";
-import { buildTown, buildZoneCameraList } from "./town.js";
-import { createZoneCamera } from "./zone-camera.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
@@ -23,15 +21,7 @@ window.addEventListener("resize", () => {
 // --- Lighting ---------------------------------------------------------
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-// Shadow frustum is centered on the town (not the origin) and wide enough
-// to cover its full footprint plus the zones extending beyond it.
-// Centered on the dense front/plaza cluster rather than the whole village
-// (which now stretches 40+ units back into the sparse wild quarter) —
-// shadow detail matters most where the buildings actually are.
-const TOWN_CENTER = new THREE.Vector3(0, 0, 15);
-sun.position.set(TOWN_CENTER.x + 18, 28, TOWN_CENTER.z + 18);
-sun.target.position.copy(TOWN_CENTER);
-scene.add(sun.target);
+sun.position.set(18, 28, 18);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -24;
@@ -53,13 +43,6 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-// Per-zone fixed camera anchors are village-only (see zone-camera.js) —
-// outside the walls the normal follow camera (set up below) is untouched.
-let zoneCamera = null;
-buildTown(scene).then((townData) => {
-  zoneCamera = createZoneCamera(camera, buildZoneCameraList(townData));
-});
-
 // --- Player (Mage) --------------------------------------------------------
 // The Mage rig's raw bind-pose height is ~3.36 units — scaled down to a
 // more human-scale ~0.94 units tall.
@@ -69,7 +52,7 @@ const PLAYER_SPEED = 2.2; // units/sec — a brisk walk rather than a sprint
 const TURN_SPEED = Math.PI * 2.5; // radians/sec — how fast the model turns to face movement
 const CAMERA_OFFSET = new THREE.Vector3(0, 9, 9); // fixed angle — translates with the player, never rotates
 const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera isn't aimed at her feet
-const SPAWN = new THREE.Vector3(0, 0, 0); // just outside the town's front gate
+const SPAWN = new THREE.Vector3(0, 0, 0);
 
 let player = null;
 let mixer = null;
@@ -225,8 +208,6 @@ function angleDelta(a, b) {
 
 // --- Main loop ------------------------------------------------------------
 const clock = new THREE.Clock();
-const followPos = new THREE.Vector3();
-const followLook = new THREE.Vector3();
 
 function tick() {
   requestAnimationFrame(tick);
@@ -253,15 +234,8 @@ function tick() {
       setAction(idleAction);
     }
 
-    if (zoneCamera) {
-      zoneCamera.update(dt, player.position, (p) => ({
-        position: followPos.copy(p).add(CAMERA_OFFSET),
-        lookAt: followLook.set(p.x, p.y + LOOK_HEIGHT, p.z),
-      }));
-    } else {
-      camera.position.copy(player.position).add(CAMERA_OFFSET);
-      camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
-    }
+    camera.position.copy(player.position).add(CAMERA_OFFSET);
+    camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
   }
 
   if (mixer) mixer.update(dt);
