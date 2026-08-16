@@ -10,15 +10,37 @@ import { createFloorArrow, setArrowLit, setArrowError } from "./arrow-icon.js";
 import { createFocusParticles } from "./focus-particles.js";
 import { createDashEffects } from "./dash-effects.js";
 import { createShockwaveEffect } from "./shockwave-effects.js";
-import { createStoneEdgeEffect } from "./stone-edge-effects.js";
+import { createStoneEdgeEffect, STONE_EDGE_LINE_LENGTH } from "./stone-edge-effects.js";
 import { createHealthBar } from "./health-bar.js";
+import { createNetwork } from "./network.js";
+import { createRemotePlayer } from "./remote-player.js";
+import { createConnectMenu } from "./connect-menu.js";
+import { createDeathOverlay } from "./death-overlay.js";
+import { distanceToPoint, distanceToSegment, SHOCKWAVE_DAMAGE, SHOCKWAVE_HIT_RADIUS, STONE_EDGE_DAMAGE, STONE_EDGE_HIT_HALF_WIDTH } from "./combat.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
 
-// No damage source yet (no enemies/combat) — sits at full health until
-// something calls healthBar.damage()/.heal().
 const healthBar = createHealthBar({ max: 100 });
+
+// --- Multiplayer (Trystero, P2P — see network.js for the message shapes) --
+const RESPAWN_SECONDS = 3;
+const network = createNetwork();
+const connectMenu = createConnectMenu({
+  onConnect: (roomId) => network.connect(roomId),
+  onDisconnect: () => network.disconnect(),
+});
+const deathOverlay = createDeathOverlay();
+const remotePlayers = new Map(); // peerId -> RemotePlayer
+let gltfTemplate = null; // the loaded Mage gltf (scene + animations), cached so remote avatars can clone it without a second fetch
+let isDead = false;
+let hitFlash = 0; // 0..1, decays — drives damageVignettePass's transient punch on taking a hit
+let networkSendTimer = 0;
+const NETWORK_SEND_INTERVAL = 1 / 15; // throttle local state broadcasts to ~15/s
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") connectMenu.toggle();
+});
 
 const BASE_FOV = 50;
 const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.1, 150);
@@ -76,10 +98,49 @@ const magicDistortionPass = new ShaderPass(MagicDistortionShader);
 // glow rim, dash sparks) are hot enough to catch it, so the sunlit ground
 // and buildings stay unaffected — "a tiny bit" of bloom on the magic bits.
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.4, 0.35, 0.85);
+
+// A red vignette that builds in as missing health grows (uIntensity), plus a
+// transient punch on the exact frame a hit lands (uHitFlash, decays like
+// effectDistortionKick elsewhere) — the "distortion and red blurs as players
+// take more damage" feedback.
+const DamageVignetteShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uIntensity: { value: 0 },
+    uHitFlash: { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uIntensity;
+    uniform float uHitFlash;
+    varying vec2 vUv;
+    void main() {
+      vec2 centered = vUv - 0.5;
+      float dist = length(centered);
+      vec4 color = texture2D(tDiffuse, vUv);
+
+      float vignette = smoothstep(0.25, 0.85, dist);
+      float redAmount = clamp(vignette * uIntensity * 0.7 + uHitFlash * 0.5, 0.0, 1.0);
+      color.rgb = mix(color.rgb, vec3(0.5, 0.02, 0.02), redAmount);
+
+      gl_FragColor = color;
+    }
+  `,
+};
+const damageVignettePass = new ShaderPass(DamageVignetteShader);
+
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 composer.addPass(bloomPass);
 composer.addPass(magicDistortionPass);
+composer.addPass(damageVignettePass);
 composer.addPass(new OutputPass());
 
 window.addEventListener("resize", () => {
@@ -246,6 +307,7 @@ function startDash(directionKeys) {
 
   dashEffects.spawnBurst(player.position, dir);
   effectDistortionKick = 1;
+  network.sendCast({ type: "dash", pos: player.position.toArray(), dir: dir.toArray() });
 }
 
 // --- Shockwave spell: press up, right, down, left (in exactly that order,
@@ -310,6 +372,7 @@ let player = null;
 let mixer = null;
 let idleAction = null;
 let walkAction = null;
+let deathAction = null;
 let currentAction = null;
 let focusGlowMeshes = [];
 const facing = new THREE.Vector3(0, 0, 1);
@@ -464,10 +527,14 @@ loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
   mixer = new THREE.AnimationMixer(player);
   const idleClip = THREE.AnimationClip.findByName(gltf.animations, "Idle");
   const walkClip = THREE.AnimationClip.findByName(gltf.animations, "Walking_A");
+  const deathClip = THREE.AnimationClip.findByName(gltf.animations, "Death_A");
   const shockwaveClip = THREE.AnimationClip.findByName(gltf.animations, SHOCKWAVE_ANIMATION_NAME);
   const stoneEdgeClip = THREE.AnimationClip.findByName(gltf.animations, STONE_EDGE_ANIMATION_NAME);
   idleAction = mixer.clipAction(idleClip);
   walkAction = mixer.clipAction(walkClip);
+  deathAction = mixer.clipAction(deathClip);
+  deathAction.setLoop(THREE.LoopOnce);
+  deathAction.clampWhenFinished = true;
   shockwaveAction = mixer.clipAction(shockwaveClip);
   shockwaveAction.setLoop(THREE.LoopOnce);
   shockwaveAction.clampWhenFinished = true;
@@ -481,6 +548,8 @@ loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
     if (e.action === shockwaveAction) isShockwaving = false;
     if (e.action === stoneEdgeAction) isStoneEdging = false;
   });
+
+  gltfTemplate = gltf; // cached so remote-player.js can clone it without a second network fetch
 });
 
 function setAction(next) {
@@ -489,6 +558,87 @@ function setAction(next) {
   next.reset().fadeIn(0.15).play();
   currentAction = next;
 }
+
+// --- Death / respawn --------------------------------------------------
+function handleDeath() {
+  if (isDead || !player) return;
+  isDead = true;
+  if (deathAction) setAction(deathAction);
+  deathOverlay.show(RESPAWN_SECONDS);
+  network.sendDeath({ pos: player.position.toArray() });
+  setTimeout(handleRespawn, RESPAWN_SECONDS * 1000);
+}
+
+function handleRespawn() {
+  if (!player) return;
+  isDead = false;
+  player.position.copy(SPAWN);
+  healthBar.setHealth(healthBar.max);
+  deathOverlay.hide();
+  if (idleAction) setAction(idleAction);
+  network.sendRespawn({ pos: SPAWN.toArray() });
+}
+
+// --- Multiplayer wiring -------------------------------------------------
+network.onPeerJoin = (peerId) => {
+  if (!gltfTemplate || remotePlayers.has(peerId)) return;
+  const remote = createRemotePlayer({ THREE, scene, gltfTemplate, scale: PLAYER_SCALE });
+  remotePlayers.set(peerId, remote);
+  connectMenu.setPeerCount(remotePlayers.size);
+};
+
+network.onPeerLeave = (peerId) => {
+  const remote = remotePlayers.get(peerId);
+  if (remote) {
+    remote.dispose();
+    remotePlayers.delete(peerId);
+  }
+  connectMenu.setPeerCount(remotePlayers.size);
+};
+
+network.onState = (data, peerId) => {
+  const remote = remotePlayers.get(peerId);
+  if (!remote) return;
+  remote.setTargetTransform(data.pos, data.rotY);
+  remote.setHealthRatio(data.health / healthBar.max);
+  if (data.alive) remote.setAction(data.action); // don't fight the death pose while they're down
+};
+
+network.onCast = (data, peerId) => {
+  const remote = remotePlayers.get(peerId);
+  if (!remote) return;
+  const origin = new THREE.Vector3(data.pos[0], data.pos[1], data.pos[2]);
+  const dir = new THREE.Vector3(data.dir[0], data.dir[1], data.dir[2]);
+  if (data.type === "dash") {
+    dashEffects.spawnBurst(origin, dir);
+  } else if (data.type === "shockwave") {
+    shockwaveEffect.trigger(origin);
+    remote.playCastAnimation("shockwave");
+  } else if (data.type === "stoneEdge") {
+    stoneEdgeEffect.trigger(origin, dir);
+    remote.playCastAnimation("stoneEdge");
+  }
+};
+
+network.onHit = (data) => {
+  if (isDead) return;
+  healthBar.damage(data.amount);
+  hitFlash = 1;
+  cameraShake = Math.max(cameraShake, 0.6);
+  if (healthBar.value <= 0) handleDeath();
+};
+
+network.onDeath = (data, peerId) => {
+  remotePlayers.get(peerId)?.playDeath();
+};
+
+network.onRespawn = (data, peerId) => {
+  const remote = remotePlayers.get(peerId);
+  if (!remote) return;
+  remote.object3D.position.set(data.pos[0], data.pos[1], data.pos[2]);
+  remote.setTargetTransform(data.pos, remote.object3D.rotation.y);
+  remote.playRespawn();
+};
 
 // --- Input (WASD movement, Shift to focus-cast) ---------------------------
 const DIRECTION_KEYS = {
@@ -500,11 +650,13 @@ const DIRECTION_KEYS = {
 
 const keys = new Set();
 window.addEventListener("keydown", (e) => {
+  if (connectMenu.isOpen) return; // room-code input handles its own keys; don't move the player while typing
+
   const key = e.key.toLowerCase();
   const alreadyDown = keys.has(key);
   keys.add(key);
 
-  if (key === "shift" && !isFocusing && !isDashing && !isShockwaving && !isStoneEdging) {
+  if (key === "shift" && !isFocusing && !isDashing && !isShockwaving && !isStoneEdging && !isDead) {
     isFocusing = true;
     castSequence.length = 0;
     dashTapCount = 0;
@@ -569,6 +721,8 @@ window.addEventListener("keydown", (e) => {
   }
 });
 window.addEventListener("keyup", (e) => {
+  if (connectMenu.isOpen) return;
+
   const key = e.key.toLowerCase();
   keys.delete(key);
   if (key === "shift") {
@@ -666,7 +820,7 @@ function tick() {
       }
 
       if (t >= 1) isDashing = false;
-    } else if (!isShockwaving && !isStoneEdging && input.moving) {
+    } else if (!isShockwaving && !isStoneEdging && !isDead && input.moving) {
       // Casting a shockwave or Stone Edge fully pauses movement;
       // focus-casting only slows it (via effectiveDt above) — she can still
       // walk around while lighting up arrows mid-cast.
@@ -679,7 +833,7 @@ function tick() {
       const maxStep = TURN_SPEED * effectiveDt;
       player.rotation.y += THREE.MathUtils.clamp(delta, -maxStep, maxStep);
       setAction(walkAction);
-    } else if (!isShockwaving && !isStoneEdging && idleAction) {
+    } else if (!isShockwaving && !isStoneEdging && !isDead && idleAction) {
       setAction(idleAction);
     }
 
@@ -700,6 +854,12 @@ function tick() {
         shockwaveEffect.trigger(player.position);
         effectDistortionKick = 1;
         cameraShake = 1;
+        network.sendCast({ type: "shockwave", pos: player.position.toArray(), dir: [0, 0, 0] });
+        for (const [peerId, remote] of remotePlayers) {
+          if (distanceToPoint(player.position, remote.object3D.position) <= SHOCKWAVE_HIT_RADIUS) {
+            network.sendHit(peerId, { amount: SHOCKWAVE_DAMAGE, sourceType: "shockwave" });
+          }
+        }
       }
     }
 
@@ -710,6 +870,13 @@ function tick() {
         stoneEdgeEffect.trigger(player.position, stoneEdgeFacing);
         effectDistortionKick = 1;
         cameraShake = 0.7;
+        network.sendCast({ type: "stoneEdge", pos: player.position.toArray(), dir: stoneEdgeFacing.toArray() });
+        const lineEnd = player.position.clone().addScaledVector(stoneEdgeFacing, STONE_EDGE_LINE_LENGTH);
+        for (const [peerId, remote] of remotePlayers) {
+          if (distanceToSegment(remote.object3D.position, player.position, lineEnd) <= STONE_EDGE_HIT_HALF_WIDTH) {
+            network.sendHit(peerId, { amount: STONE_EDGE_DAMAGE, sourceType: "stoneEdge" });
+          }
+        }
       }
     }
 
@@ -727,14 +894,33 @@ function tick() {
       camera.position.y += (Math.random() - 0.5) * cameraShake * 0.3;
       camera.position.z += (Math.random() - 0.5) * cameraShake * 0.5;
     }
+
+    if (network.connected) {
+      networkSendTimer += dt;
+      if (networkSendTimer >= NETWORK_SEND_INTERVAL) {
+        networkSendTimer = 0;
+        network.sendState({
+          pos: player.position.toArray(),
+          rotY: player.rotation.y,
+          action: currentAction === walkAction ? "walk" : "idle",
+          health: healthBar.value,
+          alive: !isDead,
+        });
+      }
+    }
   }
 
+  for (const remote of remotePlayers.values()) remote.update(dt);
+
   cameraShake = Math.max(0, cameraShake - dt * 4);
+  hitFlash = Math.max(0, hitFlash - dt * 2.5);
 
   camera.fov = THREE.MathUtils.lerp(BASE_FOV, FOCUS_FOV, focusBlend);
   camera.updateProjectionMatrix();
   magicDistortionPass.uniforms.uStrength.value = Math.max(focusBlend, effectDistortionKick);
   magicDistortionPass.uniforms.uTime.value = elapsedTime;
+  damageVignettePass.uniforms.uIntensity.value = 1 - healthBar.value / healthBar.max;
+  damageVignettePass.uniforms.uHitFlash.value = hitFlash;
 
   if (mixer) mixer.update(effectiveDt);
 

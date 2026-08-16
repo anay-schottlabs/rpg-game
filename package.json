@@ -8,7 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "trystero": "^0.25.3"
   },
   "devDependencies": {
     "vite": "^7.0.0"

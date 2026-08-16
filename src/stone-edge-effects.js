@@ -16,6 +16,9 @@ const FINAL_SPIKE_HEIGHT = 2.2;
 const FINAL_SPIKE_RADIUS = 0.36;
 const SHARDS_PER_CLUSTER = [4, 5]; // inclusive range
 
+// Exposed for hit-detection (main.js) — how far the crystal line actually reaches.
+export const STONE_EDGE_LINE_LENGTH = SPIKE_SPACING * SPIKE_COUNT;
+
 function randomBetween(min, max) {
   return min + Math.random() * (max - min);
 }
