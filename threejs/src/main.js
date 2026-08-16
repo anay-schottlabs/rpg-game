@@ -1,22 +1,76 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { resolveCollisions } from "./collision.js";
 import { createFloorArrow, setArrowLit } from "./arrow-icon.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 150);
+const BASE_FOV = 50;
+const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.1, 150);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
+// A gentle screen warp + chromatic fringing that ramps in while focus-casting
+// (driven by uStrength, see tick()) — at uStrength 0 the math collapses to
+// an identity pass, so it costs nothing outside of casting.
+const MagicDistortionShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uStrength: { value: 0 },
+    uTime: { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uStrength;
+    uniform float uTime;
+    varying vec2 vUv;
+    void main() {
+      vec2 centered = vUv - 0.5;
+      float dist = length(centered);
+
+      float ripple = sin(dist * 24.0 - uTime * 4.0);
+      vec2 uv = vUv - centered * ripple * uStrength * 0.03;
+
+      vec2 aberration = centered * uStrength * 0.012;
+      float r = texture2D(tDiffuse, uv + aberration).r;
+      float g = texture2D(tDiffuse, uv).g;
+      float b = texture2D(tDiffuse, uv - aberration).b;
+      vec3 color = vec3(r, g, b);
+
+      float vignette = smoothstep(0.9, 0.3, dist);
+      color = mix(color, color * vignette, uStrength * 0.5);
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `,
+};
+
+const magicDistortionPass = new ShaderPass(MagicDistortionShader);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(magicDistortionPass);
+composer.addPass(new OutputPass());
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // --- Lighting ---------------------------------------------------------
@@ -56,8 +110,11 @@ const LOOK_HEIGHT = 0.6; // roughly chest height at PLAYER_SCALE, so the camera 
 const SPAWN = new THREE.Vector3(0, 0, 0);
 
 // --- Spellcasting focus: hold Shift to reveal directional arrows ----------
-// No spell logic yet — just the glow + arrow lightup feedback loop.
+// No spell logic yet — just the slow-mo/zoom/distortion + arrow lightup feel.
 const FOCUS_ARROW_RADIUS = 1.4; // how far the ring of arrows sits from the player
+const FOCUS_TIME_SCALE = 0.2; // player movement/turning/animation speed while focusing
+const FOCUS_FOV = 36; // camera zooms in toward this FOV while focusing
+const FOCUS_BLEND_SPEED = 5; // how fast the zoom/distortion ramp in and out
 const focusArrowOffsets = {
   up: new THREE.Vector3(0, 0, -FOCUS_ARROW_RADIUS),
   down: new THREE.Vector3(0, 0, FOCUS_ARROW_RADIUS),
@@ -72,6 +129,7 @@ for (const direction of Object.keys(focusArrowOffsets)) {
   focusArrows[direction] = arrow;
 }
 let isFocusing = false;
+let focusBlend = 0; // smoothed 0..1 toward isFocusing, drives zoom/distortion
 const castSequence = []; // order the arrows were pressed in — not consumed yet
 
 let player = null;
@@ -150,19 +208,21 @@ function addXRaySilhouette(root) {
   }
 }
 
-// Adds a slightly-enlarged, backface-only twin of every mesh in `root` —
+// Shared by every glow mesh below so tick() can pulse opacity on one
+// material instead of walking the whole list every frame.
+const focusGlowMaterial = new THREE.MeshBasicMaterial({
+  color: 0x9a6bff,
+  side: THREE.BackSide,
+  transparent: true,
+  opacity: 0.75,
+});
+
+// Adds a noticeably-enlarged, backface-only twin of every mesh in `root` —
 // the classic inverted-hull outline trick: since only the back faces render,
 // the enlarged copy peeks out from behind the real mesh's silhouette as a
-// thin rim, giving a "glow" without any post-processing. Starts hidden;
+// thick rim, giving a "glow" without any post-processing. Starts hidden;
 // setFocusGlowVisible() toggles it with the Shift-to-focus state.
 function addFocusGlow(root) {
-  const glowMaterial = new THREE.MeshBasicMaterial({
-    color: 0x9a6bff,
-    side: THREE.BackSide,
-    transparent: true,
-    opacity: 0.6,
-  });
-
   const meshes = [];
   root.traverse((node) => {
     if (node.isMesh) meshes.push(node);
@@ -171,15 +231,15 @@ function addFocusGlow(root) {
   const glowMeshes = [];
   for (const mesh of meshes) {
     const glow = mesh.isSkinnedMesh
-      ? new THREE.SkinnedMesh(mesh.geometry, glowMaterial)
-      : new THREE.Mesh(mesh.geometry, glowMaterial);
+      ? new THREE.SkinnedMesh(mesh.geometry, focusGlowMaterial)
+      : new THREE.Mesh(mesh.geometry, focusGlowMaterial);
     if (mesh.isSkinnedMesh) {
       glow.bindMode = mesh.bindMode;
       glow.bind(mesh.skeleton, mesh.bindMatrix);
     }
     glow.position.copy(mesh.position);
     glow.quaternion.copy(mesh.quaternion);
-    glow.scale.copy(mesh.scale).multiplyScalar(1.08);
+    glow.scale.copy(mesh.scale).multiplyScalar(1.3);
     glow.visible = false;
     mesh.parent.add(glow);
     glowMeshes.push(glow);
@@ -308,27 +368,34 @@ function angleDelta(a, b) {
 
 // --- Main loop ------------------------------------------------------------
 const clock = new THREE.Clock();
+let elapsedTime = 0;
 
 function tick() {
   requestAnimationFrame(tick);
   const dt = clock.getDelta();
+  elapsedTime += dt;
+
+  // The camera zoom/distortion ramp runs in real time regardless, but the
+  // player's own movement, turning, and animation slow way down while
+  // focusing — "she's moving through syrup while the world stays normal
+  // speed" is the read we're going for.
+  focusBlend += ((isFocusing ? 1 : 0) - focusBlend) * Math.min(1, dt * FOCUS_BLEND_SPEED);
+  const effectiveDt = isFocusing ? dt * FOCUS_TIME_SCALE : dt;
 
   if (player) {
     const input = getInputVector();
 
-    // Attacking and focus-casting both fully pause movement (position,
-    // turning, and the walk/idle animation state) — she stands still until
-    // the swing finishes or Shift is released, then whatever was held
-    // resumes normally (see the mixer "finished" listener, which clears
-    // isAttacking, and the Shift keyup handler, which clears isFocusing).
-    if (!isAttacking && !isFocusing && input.moving) {
-      player.position.x += input.x * PLAYER_SPEED * dt;
-      player.position.z += input.z * PLAYER_SPEED * dt;
+    // Attacking fully pauses movement; focus-casting only slows it (via
+    // effectiveDt above) — she can still walk around while lighting up
+    // arrows mid-cast.
+    if (!isAttacking && input.moving) {
+      player.position.x += input.x * PLAYER_SPEED * effectiveDt;
+      player.position.z += input.z * PLAYER_SPEED * effectiveDt;
       resolveCollisions(player.position, PLAYER_RADIUS);
       facing.set(input.x, 0, input.z);
       const targetAngle = Math.atan2(facing.x, facing.z);
       const delta = angleDelta(player.rotation.y, targetAngle);
-      const maxStep = TURN_SPEED * dt;
+      const maxStep = TURN_SPEED * effectiveDt;
       player.rotation.y += THREE.MathUtils.clamp(delta, -maxStep, maxStep);
       setAction(walkAction);
     } else if (!isAttacking && idleAction) {
@@ -340,13 +407,19 @@ function tick() {
         focusArrows[direction].position.copy(player.position).add(offset);
         focusArrows[direction].position.y = 0.01;
       }
+      focusGlowMaterial.opacity = 0.6 + Math.sin(elapsedTime * 6) * 0.15;
     }
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
     camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
   }
 
-  if (mixer) mixer.update(dt);
+  camera.fov = THREE.MathUtils.lerp(BASE_FOV, FOCUS_FOV, focusBlend);
+  camera.updateProjectionMatrix();
+  magicDistortionPass.uniforms.uStrength.value = focusBlend;
+  magicDistortionPass.uniforms.uTime.value = elapsedTime;
+
+  if (mixer) mixer.update(effectiveDt);
 
   // Environment-only depth pre-pass for the X-ray silhouette (see
   // addXRaySilhouette above) — player hidden so her own meshes can never
@@ -359,6 +432,6 @@ function tick() {
     player.visible = true;
   }
 
-  renderer.render(scene, camera);
+  composer.render();
 }
 tick();
