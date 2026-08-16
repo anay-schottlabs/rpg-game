@@ -7,6 +7,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { resolveCollisions } from "./collision.js";
 import { createFloorArrow, setArrowLit } from "./arrow-icon.js";
 import { createFocusParticles } from "./focus-particles.js";
+import { createDashEffects } from "./dash-effects.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0e0);
@@ -135,6 +136,69 @@ let isFocusing = false;
 let focusBlend = 0; // smoothed 0..1 toward isFocusing, drives zoom/distortion
 const castSequence = []; // order the arrows were pressed in — not consumed yet
 
+// --- Dash spell: double-tap the direction you're moving in, then release
+// Shift, to dash that way. The two taps don't have to be identical — each
+// just has to match whichever way she's currently moving at the moment of
+// that press — diagonal movement (e.g. W+D) requires both matching arrow
+// keys pressed (in either order) to complete that tap.
+const DASH_DISTANCE = 3.2; // units covered by a dash
+const DASH_DURATION = 0.16; // seconds
+const REQUIRED_DASH_TAPS = 2;
+let dashTapCount = 0;
+let dashDirectionKeys = null; // Set<"up"|"down"|"left"|"right"> the taps last matched
+const pressedThisTap = new Set(); // arrow-key directions pressed toward the current tap
+let isDashing = false;
+let dashTimer = 0;
+const dashStartPos = new THREE.Vector3();
+const dashTargetPos = new THREE.Vector3();
+let dashAfterimageCooldown = 0;
+let dashDistortionKick = 0; // extra screen-warp punch on top of focusBlend, decays after a dash
+
+function currentMovementDirections() {
+  const dirs = new Set();
+  if (keys.has("w")) dirs.add("up");
+  if (keys.has("s")) dirs.add("down");
+  if (keys.has("a")) dirs.add("left");
+  if (keys.has("d")) dirs.add("right");
+  return dirs;
+}
+
+function directionSetsEqual(a, b) {
+  if (a.size !== b.size) return false;
+  for (const value of a) if (!b.has(value)) return false;
+  return true;
+}
+
+// Same up=-Z/down=+Z/left=-X/right=+X convention as ARROW_DIRECTIONS and
+// getInputVector's WASD mapping.
+function directionSetToVector(dirs) {
+  const v = new THREE.Vector3();
+  if (dirs.has("up")) v.z -= 1;
+  if (dirs.has("down")) v.z += 1;
+  if (dirs.has("left")) v.x -= 1;
+  if (dirs.has("right")) v.x += 1;
+  return v.lengthSq() > 0 ? v.normalize() : null;
+}
+
+function startDash(directionKeys) {
+  const dir = directionSetToVector(directionKeys);
+  if (!dir || !player) return;
+
+  isDashing = true;
+  dashTimer = 0;
+  dashAfterimageCooldown = 0;
+  dashStartPos.copy(player.position);
+  dashTargetPos.copy(player.position).addScaledVector(dir, DASH_DISTANCE);
+  resolveCollisions(dashTargetPos, PLAYER_RADIUS);
+
+  facing.copy(dir);
+  player.rotation.y = Math.atan2(dir.x, dir.z);
+  setAction(walkAction);
+
+  dashEffects.spawnBurst(player.position, dir);
+  dashDistortionKick = 1;
+}
+
 let player = null;
 let mixer = null;
 let idleAction = null;
@@ -207,6 +271,7 @@ function addXRaySilhouette(root) {
     ghost.quaternion.copy(mesh.quaternion);
     ghost.scale.copy(mesh.scale);
     ghost.renderOrder = 999;
+    ghost.userData.isEffectMesh = true; // skip when dash-effects.js snapshots the player
     mesh.parent.add(ghost);
   }
 }
@@ -246,6 +311,7 @@ function addFocusGlow(root) {
     glow.quaternion.copy(mesh.quaternion);
     glow.scale.copy(mesh.scale).multiplyScalar(1.3);
     glow.visible = false;
+    glow.userData.isEffectMesh = true; // skip when dash-effects.js snapshots the player
     mesh.parent.add(glow);
     glowMeshes.push(glow);
   }
@@ -256,6 +322,10 @@ function addFocusGlow(root) {
 // actual "emanating" part of the glow, on top of the static outline rim.
 const focusParticles = createFocusParticles(FOCUS_GLOW_COLOR);
 scene.add(focusParticles.group);
+
+// Spark burst + frozen-pose afterimage trail for the dash spell (see startDash below).
+const dashEffects = createDashEffects(FOCUS_GLOW_COLOR);
+scene.add(dashEffects.group);
 
 const envDepthTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 envDepthTarget.depthTexture = new THREE.DepthTexture(window.innerWidth, window.innerHeight);
@@ -313,11 +383,15 @@ const DIRECTION_KEYS = {
 const keys = new Set();
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
+  const alreadyDown = keys.has(key);
   keys.add(key);
 
-  if (key === "shift" && !isFocusing) {
+  if (key === "shift" && !isFocusing && !isDashing) {
     isFocusing = true;
     castSequence.length = 0;
+    dashTapCount = 0;
+    dashDirectionKeys = null;
+    pressedThisTap.clear();
     setFocusGlowVisible(true);
     for (const [direction, arrow] of Object.entries(focusArrows)) {
       clearTimeout(arrowLitTimers[direction]);
@@ -339,10 +413,31 @@ window.addEventListener("keydown", (e) => {
     arrowLitTimers[direction] = setTimeout(() => {
       setArrowLit(focusArrows[direction], false);
     }, ARROW_LIT_DURATION_MS);
+
+    // Dash tap-matching: ignore OS key-repeat (alreadyDown) so holding a key
+    // doesn't rack up taps by itself — only fresh presses count. A press in
+    // a direction she isn't currently moving (or isn't moving at all) is a
+    // miss and resets progress; otherwise it contributes toward the current
+    // tap, which completes once every direction of her current movement has
+    // been pressed (both arrows together for a diagonal).
+    if (!alreadyDown) {
+      const movementDirs = currentMovementDirections();
+      if (movementDirs.size === 0 || !movementDirs.has(direction)) {
+        dashTapCount = 0;
+        pressedThisTap.clear();
+      } else {
+        pressedThisTap.add(direction);
+        if (directionSetsEqual(pressedThisTap, movementDirs)) {
+          dashTapCount += 1;
+          dashDirectionKeys = new Set(movementDirs);
+          pressedThisTap.clear();
+        }
+      }
+    }
     return;
   }
 
-  if (key === "arrowup" && attackAction && !isAttacking) {
+  if (key === "arrowup" && attackAction && !isAttacking && !isDashing) {
     isAttacking = true;
     setAction(attackAction);
   }
@@ -351,7 +446,13 @@ window.addEventListener("keyup", (e) => {
   const key = e.key.toLowerCase();
   keys.delete(key);
   if (key === "shift") {
+    if (isFocusing && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys) {
+      startDash(dashDirectionKeys);
+    }
     isFocusing = false;
+    dashTapCount = 0;
+    dashDirectionKeys = null;
+    pressedThisTap.clear();
     setFocusGlowVisible(false);
     for (const [direction, arrow] of Object.entries(focusArrows)) {
       clearTimeout(arrowLitTimers[direction]);
@@ -401,13 +502,32 @@ function tick() {
   focusBlend += ((isFocusing ? 1 : 0) - focusBlend) * Math.min(1, dt * FOCUS_BLEND_SPEED);
   const effectiveDt = isFocusing ? dt * FOCUS_TIME_SCALE : dt;
 
+  dashDistortionKick = Math.max(0, dashDistortionKick - dt * 3);
+
   if (player) {
     const input = getInputVector();
 
-    // Attacking fully pauses movement; focus-casting only slows it (via
-    // effectiveDt above) — she can still walk around while lighting up
-    // arrows mid-cast.
-    if (!isAttacking && input.moving) {
+    if (isDashing) {
+      // Dashing owns position for its short duration — always real-time
+      // (focus, and its slow-mo, has already ended by the time a dash
+      // starts) and eased so it launches fast and eases into the landing.
+      dashTimer += dt;
+      const t = Math.min(1, dashTimer / DASH_DURATION);
+      const eased = 1 - Math.pow(1 - t, 3);
+      player.position.lerpVectors(dashStartPos, dashTargetPos, eased);
+      resolveCollisions(player.position, PLAYER_RADIUS);
+
+      dashAfterimageCooldown -= dt;
+      if (dashAfterimageCooldown <= 0) {
+        dashAfterimageCooldown = 0.025;
+        dashEffects.spawnAfterimage(player);
+      }
+
+      if (t >= 1) isDashing = false;
+    } else if (!isAttacking && input.moving) {
+      // Attacking fully pauses movement; focus-casting only slows it (via
+      // effectiveDt above) — she can still walk around while lighting up
+      // arrows mid-cast.
       player.position.x += input.x * PLAYER_SPEED * effectiveDt;
       player.position.z += input.z * PLAYER_SPEED * effectiveDt;
       resolveCollisions(player.position, PLAYER_RADIUS);
@@ -428,10 +548,10 @@ function tick() {
       }
       focusGlowMaterial.opacity = 0.6 + Math.sin(elapsedTime * 6) * 0.15;
     }
-    // Runs every frame (not just while isFocusing) so particles already in
-    // flight finish rising and fading instead of vanishing the instant
-    // Shift is released.
+    // Both run every frame (not just while active) so particles/afterimages
+    // already in flight finish their arc instead of vanishing abruptly.
     focusParticles.update(dt, player.position, isFocusing);
+    dashEffects.update(dt);
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
     camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
@@ -439,7 +559,7 @@ function tick() {
 
   camera.fov = THREE.MathUtils.lerp(BASE_FOV, FOCUS_FOV, focusBlend);
   camera.updateProjectionMatrix();
-  magicDistortionPass.uniforms.uStrength.value = focusBlend;
+  magicDistortionPass.uniforms.uStrength.value = Math.max(focusBlend, dashDistortionKick);
   magicDistortionPass.uniforms.uTime.value = elapsedTime;
 
   if (mixer) mixer.update(effectiveDt);

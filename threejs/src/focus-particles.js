@@ -1,13 +1,9 @@
 import * as THREE from "three";
+import { loadParticleTexture } from "./particle-textures.js";
 
 // Kenney's Particle Pack (CC0) — small twinkly shapes read well as magic
 // motes at the sizes we use here.
-const TEXTURE_LOADER = new THREE.TextureLoader();
-const SPRITE_PATHS = [
-  "/assets/particle-pack/png-transparent/spark_02.png",
-  "/assets/particle-pack/png-transparent/star_04.png",
-];
-const textures = SPRITE_PATHS.map((path) => TEXTURE_LOADER.load(path));
+const textures = [loadParticleTexture("spark_02"), loadParticleTexture("star_04")];
 
 const PARTICLE_COUNT = 36;
 const DRIFT_RADIUS = 0.5; // how far a particle spirals out from the spawn column
