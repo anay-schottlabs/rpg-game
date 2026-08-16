@@ -10,6 +10,7 @@ import { createFloorArrow, setArrowLit, setArrowError } from "./arrow-icon.js";
 import { createFocusParticles } from "./focus-particles.js";
 import { createDashEffects } from "./dash-effects.js";
 import { createShockwaveEffect } from "./shockwave-effects.js";
+import { createStoneEdgeEffect } from "./stone-edge-effects.js";
 import { createHealthBar } from "./health-bar.js";
 
 const scene = new THREE.Scene();
@@ -269,6 +270,29 @@ function triggerShockwave() {
   if (shockwaveAction) setAction(shockwaveAction);
 }
 
+// --- Stone Edge spell: press down, down, up (in exactly that order,
+// nothing else mixed in) then release Shift. A line of crystal spikes
+// erupts away from her in whichever direction she's currently facing,
+// ending in a bigger final spike — see stone-edge-effects.js. Doesn't
+// correspond to a measured animation-contact frame like the shockwave
+// (it's a channeled cast, not a strike) — timed instead to land a beat
+// after the staff-raise gesture starts.
+const STONE_EDGE_SEQUENCE = ["down", "down", "up"];
+const STONE_EDGE_ANIMATION_NAME = "Spellcast_Raise";
+const STONE_EDGE_TRIGGER_TIME = 0.5;
+let isStoneEdging = false;
+let stoneEdgeAction = null;
+let stoneEdgeContactTimer = 0;
+let stoneEdgeEffectFired = false;
+
+function triggerStoneEdge() {
+  if (!player) return;
+  isStoneEdging = true;
+  stoneEdgeContactTimer = 0;
+  stoneEdgeEffectFired = false;
+  if (stoneEdgeAction) setAction(stoneEdgeAction);
+}
+
 let player = null;
 let mixer = null;
 let idleAction = null;
@@ -399,6 +423,10 @@ scene.add(dashEffects.group);
 const shockwaveEffect = createShockwaveEffect(FOCUS_GLOW_COLOR);
 scene.add(shockwaveEffect.group);
 
+// Traveling line of crystal spikes for the Stone Edge spell (see triggerStoneEdge above).
+const stoneEdgeEffect = createStoneEdgeEffect(FOCUS_GLOW_COLOR);
+scene.add(stoneEdgeEffect.group);
+
 const envDepthTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 envDepthTarget.depthTexture = new THREE.DepthTexture(window.innerWidth, window.innerHeight);
 envDepthUniforms.envDepth.value = envDepthTarget.depthTexture;
@@ -424,16 +452,21 @@ loader.load("/assets/characters/adventurers/Characters/Mage.glb", (gltf) => {
   const idleClip = THREE.AnimationClip.findByName(gltf.animations, "Idle");
   const walkClip = THREE.AnimationClip.findByName(gltf.animations, "Walking_A");
   const shockwaveClip = THREE.AnimationClip.findByName(gltf.animations, SHOCKWAVE_ANIMATION_NAME);
+  const stoneEdgeClip = THREE.AnimationClip.findByName(gltf.animations, STONE_EDGE_ANIMATION_NAME);
   idleAction = mixer.clipAction(idleClip);
   walkAction = mixer.clipAction(walkClip);
   shockwaveAction = mixer.clipAction(shockwaveClip);
   shockwaveAction.setLoop(THREE.LoopOnce);
   shockwaveAction.clampWhenFinished = true;
+  stoneEdgeAction = mixer.clipAction(stoneEdgeClip);
+  stoneEdgeAction.setLoop(THREE.LoopOnce);
+  stoneEdgeAction.clampWhenFinished = true;
   currentAction = idleAction;
   idleAction.play();
 
   mixer.addEventListener("finished", (e) => {
     if (e.action === shockwaveAction) isShockwaving = false;
+    if (e.action === stoneEdgeAction) isStoneEdging = false;
   });
 });
 
@@ -458,7 +491,7 @@ window.addEventListener("keydown", (e) => {
   const alreadyDown = keys.has(key);
   keys.add(key);
 
-  if (key === "shift" && !isFocusing && !isDashing && !isShockwaving) {
+  if (key === "shift" && !isFocusing && !isDashing && !isShockwaving && !isStoneEdging) {
     isFocusing = true;
     castSequence.length = 0;
     dashTapCount = 0;
@@ -522,9 +555,12 @@ window.addEventListener("keyup", (e) => {
     const dashFired =
       isFocusing && dashSequenceValid && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
     const shockwaveFired = isFocusing && !dashFired && sequenceMatches(castSequence, SHOCKWAVE_SEQUENCE);
+    const stoneEdgeFired =
+      isFocusing && !dashFired && !shockwaveFired && sequenceMatches(castSequence, STONE_EDGE_SEQUENCE);
 
     if (dashFired) startDash(dashDirectionKeys);
     else if (shockwaveFired) triggerShockwave();
+    else if (stoneEdgeFired) triggerStoneEdge();
 
     isFocusing = false;
     dashTapCount = 0;
@@ -535,7 +571,7 @@ window.addEventListener("keyup", (e) => {
     // Only flash if she actually pressed an arrow this focus but it didn't
     // add up to a spell — letting go of Shift without touching the arrows
     // at all isn't a failed cast, it's just not casting.
-    if (!dashFired && !shockwaveFired && anyDirectionPressed) {
+    if (!dashFired && !shockwaveFired && !stoneEdgeFired && anyDirectionPressed) {
       flashDashError();
     } else {
       for (const [direction, arrow] of Object.entries(focusArrows)) {
@@ -610,10 +646,10 @@ function tick() {
       }
 
       if (t >= 1) isDashing = false;
-    } else if (!isShockwaving && input.moving) {
-      // Casting a shockwave fully pauses movement; focus-casting only slows
-      // it (via effectiveDt above) — she can still walk around while
-      // lighting up arrows mid-cast.
+    } else if (!isShockwaving && !isStoneEdging && input.moving) {
+      // Casting a shockwave or Stone Edge fully pauses movement;
+      // focus-casting only slows it (via effectiveDt above) — she can still
+      // walk around while lighting up arrows mid-cast.
       player.position.x += input.x * PLAYER_SPEED * effectiveDt;
       player.position.z += input.z * PLAYER_SPEED * effectiveDt;
       resolveCollisions(player.position, PLAYER_RADIUS);
@@ -623,7 +659,7 @@ function tick() {
       const maxStep = TURN_SPEED * effectiveDt;
       player.rotation.y += THREE.MathUtils.clamp(delta, -maxStep, maxStep);
       setAction(walkAction);
-    } else if (!isShockwaving && idleAction) {
+    } else if (!isShockwaving && !isStoneEdging && idleAction) {
       setAction(idleAction);
     }
 
@@ -647,11 +683,22 @@ function tick() {
       }
     }
 
-    // Both run every frame (not just while active) so particles/afterimages
+    if (isStoneEdging && !stoneEdgeEffectFired) {
+      stoneEdgeContactTimer += dt;
+      if (stoneEdgeContactTimer >= STONE_EDGE_TRIGGER_TIME) {
+        stoneEdgeEffectFired = true;
+        stoneEdgeEffect.trigger(player.position, facing);
+        effectDistortionKick = 1;
+        cameraShake = 0.7;
+      }
+    }
+
+    // Run every frame (not just while active) so particles/afterimages/spikes
     // already in flight finish their arc instead of vanishing abruptly.
     focusParticles.update(dt, player.position, isFocusing);
     dashEffects.update(dt);
     shockwaveEffect.update(dt);
+    stoneEdgeEffect.update(dt);
 
     camera.position.copy(player.position).add(CAMERA_OFFSET);
     camera.lookAt(player.position.x, player.position.y + LOOK_HEIGHT, player.position.z);
