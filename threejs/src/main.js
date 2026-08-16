@@ -3,6 +3,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { resolveCollisions } from "./collision.js";
 import { createFloorArrow, setArrowLit } from "./arrow-icon.js";
@@ -63,8 +64,14 @@ const MagicDistortionShader = {
 };
 
 const magicDistortionPass = new ShaderPass(MagicDistortionShader);
+// High threshold keeps this cheap-and-global rather than a true selective
+// bloom: only very bright/emissive pixels (the lit arrows, focus particles,
+// glow rim, dash sparks) are hot enough to catch it, so the sunlit ground
+// and buildings stay unaffected — "a tiny bit" of bloom on the magic bits.
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.4, 0.35, 0.85);
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+composer.addPass(bloomPass);
 composer.addPass(magicDistortionPass);
 composer.addPass(new OutputPass());
 

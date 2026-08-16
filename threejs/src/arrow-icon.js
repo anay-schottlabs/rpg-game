@@ -25,12 +25,9 @@ export const ARROW_DIRECTIONS = {
   left: Math.PI / 2,
 };
 
-export const ARROW_COLORS = {
-  up: 0xff4d4d,
-  down: 0x4dff88,
-  left: 0x4d9fff,
-  right: 0xffd24d,
-};
+// One shared lit color for every direction (matches the gold focus glow)
+// rather than a distinct color per arrow.
+export const ARROW_LIT_COLOR = 0xffdd44;
 
 // Neutral dim color arrows sit at until setArrowLit(..., true) brightens
 // them to their direction's signature color — makes a press read as a
@@ -62,10 +59,7 @@ function buildArrowMesh({ size, depth, litColor }) {
 
 // An upright arrow facing +Z, e.g. for a HUD panel or floating prompt —
 // direction is baked into its in-plane rotation, no further orientation needed.
-export function createArrowMesh(
-  direction,
-  { size = 1, depth = 0.15, color = ARROW_COLORS[direction] ?? 0xffffff } = {},
-) {
+export function createArrowMesh(direction, { size = 1, depth = 0.15, color = ARROW_LIT_COLOR } = {}) {
   const mesh = buildArrowMesh({ size, depth, litColor: color });
   mesh.rotation.z = ARROW_DIRECTIONS[direction] ?? 0;
   return mesh;
@@ -75,10 +69,7 @@ export function createArrowMesh(
 // Returned as a group so "lie flat" and "which way it points" stay two
 // separate rotations rather than one hand-combined Euler. The lightable
 // material is exposed via group.userData.material for setArrowLit().
-export function createFloorArrow(
-  direction,
-  { size = 1, depth = 0.08, color = ARROW_COLORS[direction] ?? 0xffffff } = {},
-) {
+export function createFloorArrow(direction, { size = 1, depth = 0.08, color = ARROW_LIT_COLOR } = {}) {
   const mesh = buildArrowMesh({ size, depth, litColor: color });
   mesh.rotation.x = -Math.PI / 2;
   const group = new THREE.Group();
