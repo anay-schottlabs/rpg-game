@@ -225,6 +225,7 @@ const DASH_DURATION = 0.16; // seconds
 const REQUIRED_DASH_TAPS = 2;
 let dashTapCount = 0;
 let dashDirectionKeys = null; // Set<"up"|"down"|"left"|"right"> the taps last matched
+let standStillDirection = null; // while stationary, the single direction the first press locked onto — the second press must match this, not just itself
 const pressedThisTap = new Set(); // arrow-key directions pressed toward the current tap
 let anyDirectionPressed = false; // whether *any* arrow was pressed this focus — distinguishes "no attempt" from "wrong attempt"
 let dashSequenceValid = true; // flips false the moment any mismatched key is pressed, for the rest of this focus
@@ -664,6 +665,7 @@ window.addEventListener("keydown", (e) => {
     pressedThisTap.clear();
     anyDirectionPressed = false;
     dashSequenceValid = true;
+    standStillDirection = null;
     const facingDir = vectorToDirection(facing);
     stoneEdgeSequence = [facingDir, facingDir, OPPOSITE_DIRECTION[facingDir]];
     stoneEdgeFacing.copy(facing);
@@ -695,24 +697,34 @@ window.addEventListener("keydown", (e) => {
     // doesn't rack up taps by itself — only fresh presses count. While she's
     // moving, a press has to match her current movement direction (both
     // arrows together for a diagonal). While standing still there's no
-    // movement to match against, so the pressed direction just matches
-    // itself — a single arrow, double-tapped, dashes her that way even from
-    // a standstill (no diagonal chord possible in that case, since nothing
-    // indicates one was intended). A press that doesn't match the reference
-    // is quietly noted (dashSequenceValid) rather than shown — it doesn't
-    // disrupt her taps in progress, but it means the cast can't succeed even
-    // if she goes on to complete a valid-looking double-tap.
+    // movement to match against, so the *first* press locks in a target
+    // direction (no diagonal chord possible here, since nothing indicates
+    // one was intended) and the second press has to match THAT SAME
+    // direction — not just match itself, or any two different arrows
+    // (e.g. the shockwave's up/right/down/left) would each trivially
+    // complete their own "tap" and always resolve to a dash. A press that
+    // doesn't match the reference is quietly noted (dashSequenceValid)
+    // rather than shown — it doesn't disrupt her taps in progress, but it
+    // means the cast can't succeed even if she goes on to complete a
+    // valid-looking double-tap.
     if (!alreadyDown) {
       anyDirectionPressed = true;
       const movementDirs = currentMovementDirections();
-      const referenceDirs = movementDirs.size > 0 ? movementDirs : new Set([direction]);
-      if (referenceDirs.has(direction)) {
-        pressedThisTap.add(direction);
-        if (directionSetsEqual(pressedThisTap, referenceDirs)) {
-          dashTapCount += 1;
-          dashDirectionKeys = new Set(referenceDirs);
-          pressedThisTap.clear();
+      if (movementDirs.size > 0) {
+        if (movementDirs.has(direction)) {
+          pressedThisTap.add(direction);
+          if (directionSetsEqual(pressedThisTap, movementDirs)) {
+            dashTapCount += 1;
+            dashDirectionKeys = new Set(movementDirs);
+            pressedThisTap.clear();
+          }
+        } else {
+          dashSequenceValid = false;
         }
+      } else if (standStillDirection === null || direction === standStillDirection) {
+        standStillDirection = direction;
+        dashTapCount += 1;
+        dashDirectionKeys = new Set([direction]);
       } else {
         dashSequenceValid = false;
       }
