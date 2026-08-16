@@ -6,7 +6,7 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { resolveCollisions } from "./collision.js";
-import { createFloorArrow, setArrowLit } from "./arrow-icon.js";
+import { createFloorArrow, setArrowLit, setArrowError } from "./arrow-icon.js";
 import { createFocusParticles } from "./focus-particles.js";
 import { createDashEffects } from "./dash-effects.js";
 
@@ -160,6 +160,28 @@ const dashStartPos = new THREE.Vector3();
 const dashTargetPos = new THREE.Vector3();
 let dashAfterimageCooldown = 0;
 let dashDistortionKick = 0; // extra screen-warp punch on top of focusBlend, decays after a dash
+
+const DASH_ERROR_FLASH_MS = 220; // how long arrows flash red on a wrong press or a fizzled cast
+let dashErrorFlashTimer = null;
+
+// Flashes every focus arrow red — a wrong-direction press, or releasing
+// Shift without completing the required taps. If `hideAfter` is set (the
+// fizzled-release case, where focus has already ended) the arrows are also
+// hidden once the flash finishes; otherwise (a wrong press mid-cast) they
+// just revert to their normal dim/lit state so the attempt can continue.
+function flashDashError(hideAfter = false) {
+  clearTimeout(dashErrorFlashTimer);
+  for (const [direction, arrow] of Object.entries(focusArrows)) {
+    clearTimeout(arrowLitTimers[direction]);
+    setArrowError(arrow, true);
+  }
+  dashErrorFlashTimer = setTimeout(() => {
+    for (const arrow of Object.values(focusArrows)) {
+      setArrowError(arrow, false);
+      if (hideAfter) arrow.visible = false;
+    }
+  }, DASH_ERROR_FLASH_MS);
+}
 
 function currentMovementDirections() {
   const dirs = new Set();
@@ -400,6 +422,7 @@ window.addEventListener("keydown", (e) => {
     dashDirectionKeys = null;
     pressedThisTap.clear();
     setFocusGlowVisible(true);
+    clearTimeout(dashErrorFlashTimer);
     for (const [direction, arrow] of Object.entries(focusArrows)) {
       clearTimeout(arrowLitTimers[direction]);
       arrow.visible = true;
@@ -424,14 +447,18 @@ window.addEventListener("keydown", (e) => {
     // Dash tap-matching: ignore OS key-repeat (alreadyDown) so holding a key
     // doesn't rack up taps by itself — only fresh presses count. A press in
     // a direction she isn't currently moving (or isn't moving at all) is a
-    // miss and resets progress; otherwise it contributes toward the current
-    // tap, which completes once every direction of her current movement has
-    // been pressed (both arrows together for a diagonal).
+    // miss — flashes every arrow red and resets progress; otherwise it
+    // contributes toward the current tap, which completes once every
+    // direction of her current movement has been pressed (both arrows
+    // together for a diagonal — pressing only one is "too few" and simply
+    // won't complete the tap; pressing an unrelated third is "too many" and
+    // is caught by this same miss check).
     if (!alreadyDown) {
       const movementDirs = currentMovementDirections();
       if (movementDirs.size === 0 || !movementDirs.has(direction)) {
         dashTapCount = 0;
         pressedThisTap.clear();
+        flashDashError(false);
       } else {
         pressedThisTap.add(direction);
         if (directionSetsEqual(pressedThisTap, movementDirs)) {
@@ -453,17 +480,27 @@ window.addEventListener("keyup", (e) => {
   const key = e.key.toLowerCase();
   keys.delete(key);
   if (key === "shift") {
-    if (isFocusing && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys) {
-      startDash(dashDirectionKeys);
-    }
+    const dashFired = isFocusing && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
+    // Anything short of the full tap count is a fizzle, not silence, if she
+    // actually attempted one — a single completed tap or an in-progress
+    // (but never completed) diagonal both count as an attempt.
+    const hadAttempt = dashTapCount > 0 || pressedThisTap.size > 0;
+
+    if (dashFired) startDash(dashDirectionKeys);
+
     isFocusing = false;
     dashTapCount = 0;
     dashDirectionKeys = null;
     pressedThisTap.clear();
     setFocusGlowVisible(false);
-    for (const [direction, arrow] of Object.entries(focusArrows)) {
-      clearTimeout(arrowLitTimers[direction]);
-      arrow.visible = false;
+
+    if (!dashFired && hadAttempt) {
+      flashDashError(true);
+    } else {
+      for (const [direction, arrow] of Object.entries(focusArrows)) {
+        clearTimeout(arrowLitTimers[direction]);
+        arrow.visible = false;
+      }
     }
   }
 });

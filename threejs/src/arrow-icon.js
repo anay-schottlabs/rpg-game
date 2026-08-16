@@ -34,6 +34,10 @@ export const ARROW_LIT_COLOR = 0xffdd44;
 // clear state change instead of just a color swap.
 const UNLIT_COLOR = 0x55555f;
 
+// A miss (wrong direction, or a cast that fizzled) flashes arrows this red
+// rather than their usual gold — see setArrowError().
+const ERROR_COLOR = 0xff3333;
+
 function buildArrowMesh({ size, depth, litColor }) {
   const geometry = new THREE.ExtrudeGeometry(buildArrowShape(size), {
     depth,
@@ -88,6 +92,23 @@ export function setArrowLit(arrowObject, lit) {
     material.color.setHex(material.userData.litColor);
     material.emissive.setHex(material.userData.litColor);
     material.emissiveIntensity = 1.4;
+  } else {
+    material.color.setHex(UNLIT_COLOR);
+    material.emissive.setHex(0x000000);
+    material.emissiveIntensity = 0;
+  }
+}
+
+// Toggles an arrow's "invalid input" flash — wrong direction pressed, or a
+// cast released without completing the required taps. Overrides whatever
+// lit/unlit state the arrow was in; the caller reverts it afterward.
+export function setArrowError(arrowObject, active) {
+  const material = arrowObject.material ?? arrowObject.userData.material;
+  if (!material) return;
+  if (active) {
+    material.color.setHex(ERROR_COLOR);
+    material.emissive.setHex(ERROR_COLOR);
+    material.emissiveIntensity = 1.6;
   } else {
     material.color.setHex(UNLIT_COLOR);
     material.emissive.setHex(0x000000);
