@@ -147,13 +147,17 @@ const castSequence = []; // order the arrows were pressed in — not consumed ye
 // Shift, to dash that way. The two taps don't have to be identical — each
 // just has to match whichever way she's currently moving at the moment of
 // that press — diagonal movement (e.g. W+D) requires both matching arrow
-// keys pressed (in either order) to complete that tap.
+// keys pressed (in either order) to complete that tap. She's free to press
+// whatever arrows she likes while focusing — presses that don't match her
+// current movement just don't count toward anything; nothing is validated
+// (or resets progress) until Shift is released.
 const DASH_DISTANCE = 3.2; // units covered by a dash
 const DASH_DURATION = 0.16; // seconds
 const REQUIRED_DASH_TAPS = 2;
 let dashTapCount = 0;
 let dashDirectionKeys = null; // Set<"up"|"down"|"left"|"right"> the taps last matched
 const pressedThisTap = new Set(); // arrow-key directions pressed toward the current tap
+let anyDirectionPressed = false; // whether *any* arrow was pressed this focus — distinguishes "no attempt" from "wrong attempt"
 let isDashing = false;
 let dashTimer = 0;
 const dashStartPos = new THREE.Vector3();
@@ -161,15 +165,12 @@ const dashTargetPos = new THREE.Vector3();
 let dashAfterimageCooldown = 0;
 let dashDistortionKick = 0; // extra screen-warp punch on top of focusBlend, decays after a dash
 
-const DASH_ERROR_FLASH_MS = 220; // how long arrows flash red on a wrong press or a fizzled cast
+const DASH_ERROR_FLASH_MS = 220; // how long arrows flash red after a fizzled cast
 let dashErrorFlashTimer = null;
 
-// Flashes every focus arrow red — a wrong-direction press, or releasing
-// Shift without completing the required taps. If `hideAfter` is set (the
-// fizzled-release case, where focus has already ended) the arrows are also
-// hidden once the flash finishes; otherwise (a wrong press mid-cast) they
-// just revert to their normal dim/lit state so the attempt can continue.
-function flashDashError(hideAfter = false) {
+// Flashes every focus arrow red then hides them — called once Shift is
+// released on an attempted-but-incomplete cast (see the keyup handler).
+function flashDashError() {
   clearTimeout(dashErrorFlashTimer);
   for (const [direction, arrow] of Object.entries(focusArrows)) {
     clearTimeout(arrowLitTimers[direction]);
@@ -178,7 +179,7 @@ function flashDashError(hideAfter = false) {
   dashErrorFlashTimer = setTimeout(() => {
     for (const arrow of Object.values(focusArrows)) {
       setArrowError(arrow, false);
-      if (hideAfter) arrow.visible = false;
+      arrow.visible = false;
     }
   }, DASH_ERROR_FLASH_MS);
 }
@@ -421,6 +422,7 @@ window.addEventListener("keydown", (e) => {
     dashTapCount = 0;
     dashDirectionKeys = null;
     pressedThisTap.clear();
+    anyDirectionPressed = false;
     setFocusGlowVisible(true);
     clearTimeout(dashErrorFlashTimer);
     for (const [direction, arrow] of Object.entries(focusArrows)) {
@@ -434,7 +436,9 @@ window.addEventListener("keydown", (e) => {
   // While focusing, arrow keys flash the corresponding arrow lit (then back
   // off after ARROW_LIT_DURATION_MS) instead of steering the camera-relative
   // attack — no spell is cast yet, this just records and displays the
-  // sequence as it's pressed.
+  // sequence as it's pressed. She's free to press any arrow she wants here;
+  // nothing is validated (or flashes red) until Shift is released — see the
+  // keyup handler below.
   if (isFocusing && DIRECTION_KEYS[key]) {
     const direction = DIRECTION_KEYS[key];
     castSequence.push(direction);
@@ -445,21 +449,15 @@ window.addEventListener("keydown", (e) => {
     }, ARROW_LIT_DURATION_MS);
 
     // Dash tap-matching: ignore OS key-repeat (alreadyDown) so holding a key
-    // doesn't rack up taps by itself — only fresh presses count. A press in
-    // a direction she isn't currently moving (or isn't moving at all) is a
-    // miss — flashes every arrow red and resets progress; otherwise it
-    // contributes toward the current tap, which completes once every
-    // direction of her current movement has been pressed (both arrows
-    // together for a diagonal — pressing only one is "too few" and simply
-    // won't complete the tap; pressing an unrelated third is "too many" and
-    // is caught by this same miss check).
+    // doesn't rack up taps by itself — only fresh presses count. A press
+    // that matches her current movement direction contributes toward the
+    // current tap, which completes once every direction of that movement
+    // has been pressed (both arrows together for a diagonal). A press that
+    // doesn't match just doesn't count toward anything — no penalty.
     if (!alreadyDown) {
+      anyDirectionPressed = true;
       const movementDirs = currentMovementDirections();
-      if (movementDirs.size === 0 || !movementDirs.has(direction)) {
-        dashTapCount = 0;
-        pressedThisTap.clear();
-        flashDashError(false);
-      } else {
+      if (movementDirs.size > 0 && movementDirs.has(direction)) {
         pressedThisTap.add(direction);
         if (directionSetsEqual(pressedThisTap, movementDirs)) {
           dashTapCount += 1;
@@ -481,10 +479,6 @@ window.addEventListener("keyup", (e) => {
   keys.delete(key);
   if (key === "shift") {
     const dashFired = isFocusing && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
-    // Anything short of the full tap count is a fizzle, not silence, if she
-    // actually attempted one — a single completed tap or an in-progress
-    // (but never completed) diagonal both count as an attempt.
-    const hadAttempt = dashTapCount > 0 || pressedThisTap.size > 0;
 
     if (dashFired) startDash(dashDirectionKeys);
 
@@ -494,14 +488,18 @@ window.addEventListener("keyup", (e) => {
     pressedThisTap.clear();
     setFocusGlowVisible(false);
 
-    if (!dashFired && hadAttempt) {
-      flashDashError(true);
+    // Only flash if she actually pressed an arrow this focus but it didn't
+    // add up to a spell — letting go of Shift without touching the arrows
+    // at all isn't a failed cast, it's just not casting.
+    if (!dashFired && anyDirectionPressed) {
+      flashDashError();
     } else {
       for (const [direction, arrow] of Object.entries(focusArrows)) {
         clearTimeout(arrowLitTimers[direction]);
         arrow.visible = false;
       }
     }
+    anyDirectionPressed = false;
   }
 });
 
