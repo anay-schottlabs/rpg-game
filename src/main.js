@@ -220,6 +220,15 @@ function directionSetToVector(dirs) {
   return v.lengthSq() > 0 ? v.normalize() : null;
 }
 
+// Collapses a facing vector to whichever of the 4 arrow directions it's
+// closest to (dominant axis wins), same convention as above.
+function vectorToDirection(v) {
+  if (Math.abs(v.x) > Math.abs(v.z)) return v.x > 0 ? "right" : "left";
+  return v.z > 0 ? "down" : "up";
+}
+
+const OPPOSITE_DIRECTION = { up: "down", down: "up", left: "right", right: "left" };
+
 function startDash(directionKeys) {
   const dir = directionSetToVector(directionKeys);
   if (!dir || !player) return;
@@ -270,16 +279,20 @@ function triggerShockwave() {
   if (shockwaveAction) setAction(shockwaveAction);
 }
 
-// --- Stone Edge spell: press down, down, up (in exactly that order,
-// nothing else mixed in) then release Shift. A line of crystal spikes
-// erupts away from her in whichever direction she's currently facing,
-// ending in a bigger final spike — see stone-edge-effects.js. Doesn't
-// correspond to a measured animation-contact frame like the shockwave
-// (it's a channeled cast, not a strike) — timed instead to land a beat
-// after the staff-raise gesture starts.
-const STONE_EDGE_SEQUENCE = ["down", "down", "up"];
+// --- Stone Edge spell: press the direction she's facing twice, then the
+// opposite direction once (exactly that, nothing else mixed in), then
+// release Shift. The required sequence is snapshotted from her facing when
+// focus starts — e.g. facing "up" means the cast is up, up, down — so it
+// always lines up with the direction the crystal line actually erupts in
+// (see stoneEdgeEffect.trigger(player.position, facing) below). A line of
+// crystal spikes erupts away from her, ending in a bigger final spike —
+// see stone-edge-effects.js. Doesn't correspond to a measured
+// animation-contact frame like the shockwave (it's a channeled cast, not a
+// strike) — timed instead to land a beat after the staff-raise gesture starts.
 const STONE_EDGE_ANIMATION_NAME = "Spellcast_Raise";
 const STONE_EDGE_TRIGGER_TIME = 0.5;
+let stoneEdgeSequence = null; // Set at focus-start from facing; null means "not available this focus"
+const stoneEdgeFacing = new THREE.Vector3(); // facing, snapshotted at focus-start alongside stoneEdgeSequence
 let isStoneEdging = false;
 let stoneEdgeAction = null;
 let stoneEdgeContactTimer = 0;
@@ -499,6 +512,9 @@ window.addEventListener("keydown", (e) => {
     pressedThisTap.clear();
     anyDirectionPressed = false;
     dashSequenceValid = true;
+    const facingDir = vectorToDirection(facing);
+    stoneEdgeSequence = [facingDir, facingDir, OPPOSITE_DIRECTION[facingDir]];
+    stoneEdgeFacing.copy(facing);
     setFocusGlowVisible(true);
     clearTimeout(dashErrorFlashTimer);
     for (const [direction, arrow] of Object.entries(focusArrows)) {
@@ -524,21 +540,25 @@ window.addEventListener("keydown", (e) => {
     }, ARROW_LIT_DURATION_MS);
 
     // Dash tap-matching: ignore OS key-repeat (alreadyDown) so holding a key
-    // doesn't rack up taps by itself — only fresh presses count. A press
-    // that matches her current movement direction contributes toward the
-    // current tap, which completes once every direction of that movement
-    // has been pressed (both arrows together for a diagonal). A press that
-    // doesn't match is quietly noted (dashSequenceValid) rather than shown —
-    // it doesn't disrupt her taps in progress, but it means the cast can't
-    // succeed even if she goes on to complete a valid-looking double-tap.
+    // doesn't rack up taps by itself — only fresh presses count. While she's
+    // moving, a press has to match her current movement direction (both
+    // arrows together for a diagonal). While standing still there's no
+    // movement to match against, so the pressed direction just matches
+    // itself — a single arrow, double-tapped, dashes her that way even from
+    // a standstill (no diagonal chord possible in that case, since nothing
+    // indicates one was intended). A press that doesn't match the reference
+    // is quietly noted (dashSequenceValid) rather than shown — it doesn't
+    // disrupt her taps in progress, but it means the cast can't succeed even
+    // if she goes on to complete a valid-looking double-tap.
     if (!alreadyDown) {
       anyDirectionPressed = true;
       const movementDirs = currentMovementDirections();
-      if (movementDirs.size > 0 && movementDirs.has(direction)) {
+      const referenceDirs = movementDirs.size > 0 ? movementDirs : new Set([direction]);
+      if (referenceDirs.has(direction)) {
         pressedThisTap.add(direction);
-        if (directionSetsEqual(pressedThisTap, movementDirs)) {
+        if (directionSetsEqual(pressedThisTap, referenceDirs)) {
           dashTapCount += 1;
-          dashDirectionKeys = new Set(movementDirs);
+          dashDirectionKeys = new Set(referenceDirs);
           pressedThisTap.clear();
         }
       } else {
@@ -556,7 +576,7 @@ window.addEventListener("keyup", (e) => {
       isFocusing && dashSequenceValid && dashTapCount >= REQUIRED_DASH_TAPS && dashDirectionKeys;
     const shockwaveFired = isFocusing && !dashFired && sequenceMatches(castSequence, SHOCKWAVE_SEQUENCE);
     const stoneEdgeFired =
-      isFocusing && !dashFired && !shockwaveFired && sequenceMatches(castSequence, STONE_EDGE_SEQUENCE);
+      isFocusing && !dashFired && !shockwaveFired && !!stoneEdgeSequence && sequenceMatches(castSequence, stoneEdgeSequence);
 
     if (dashFired) startDash(dashDirectionKeys);
     else if (shockwaveFired) triggerShockwave();
@@ -687,7 +707,7 @@ function tick() {
       stoneEdgeContactTimer += dt;
       if (stoneEdgeContactTimer >= STONE_EDGE_TRIGGER_TIME) {
         stoneEdgeEffectFired = true;
-        stoneEdgeEffect.trigger(player.position, facing);
+        stoneEdgeEffect.trigger(player.position, stoneEdgeFacing);
         effectDistortionKick = 1;
         cameraShake = 0.7;
       }
